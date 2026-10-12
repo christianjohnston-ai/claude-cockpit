@@ -58,7 +58,7 @@ SYNC WARNING: claude-cockpit.py imports this module (fleet_email, fleet_anchor,
   asserting it contains no keychain write or delete — the only credential
   writer allowed here is the official `claude auth login` subprocess.
 """
-import json, os, subprocess, sys, hashlib, datetime
+import json, os, subprocess, sys, hashlib, datetime, ntpath
 # No bytecode cache: importing this module used to create
 # ~/.claude-profiles/__pycache__/, and anything that points claude at a dir
 # lacking .claude.json INITIALISES a fresh config there — which once turned
@@ -68,6 +68,8 @@ sys.dont_write_bytecode = True
 IS_WINDOWS = sys.platform == "win32"
 
 BASE = os.path.expanduser("~/.claude-profiles")
+if sys.platform == "win32":
+    BASE = os.path.normpath(BASE)
 UNDO = os.path.join(BASE, ".last-switch.json")
 # Claude's own name for the shared keychain slot. It is also the PREFIX of every
 # per-config-dir slot (slot_for), so it must never change meaning.
@@ -133,7 +135,8 @@ def fleet_env(env):
 FLEET_SLOT = (f"{SLOT_PREFIX}-{hashlib.sha256(FLEET_DIR.encode()).hexdigest()[:8]}"
               if FLEET_DIR else SLOT_PREFIX)
 if IS_WINDOWS:
-    FLEET_SLOT = os.path.join(FLEET_DIR or os.path.expanduser("~/.claude"), ".credentials.json")
+    FLEET_SLOT = os.path.normpath(os.path.join(
+        FLEET_DIR or os.path.expanduser("~/.claude"), ".credentials.json"))
 DEFAULT_SLOT = FLEET_SLOT      # legacy name: every existing caller means "the fleet slot"
 # Never bare `claude`: a PATH lookup can resolve to a terminal app's shim or to a stale
 # install that predates `claude auth status` entirely.
@@ -141,6 +144,8 @@ DEFAULT_SLOT = FLEET_SLOT      # legacy name: every existing caller means "the f
 # Homebrew). SYNC WARNING: the same two-step lookup is repeated in claude-cockpit.py,
 # claude-usage.py, claude-ping.py (CLAUDE), claude-as.sh (CLAUDE_AS_BIN) and verify.sh.
 CLAUDE_BIN = os.environ.get("COCKPIT_CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude.exe" if IS_WINDOWS else "~/.local/bin/claude")
+if sys.platform == "win32":
+    CLAUDE_BIN = os.path.normpath(CLAUDE_BIN)
 
 
 def require_claude():
@@ -250,7 +255,7 @@ def slot_for(path):
     """Claude Code derives a config dir's slot as sha256(dir)[:8]. Recomputed,
     never stored, so it cannot drift if a profile is renamed."""
     if IS_WINDOWS:
-        return os.path.join(path, ".credentials.json")
+        return os.path.normpath(os.path.join(path, ".credentials.json"))
     return f"{SLOT_PREFIX}-{hashlib.sha256(path.encode()).hexdigest()[:8]}"
 
 
@@ -267,10 +272,15 @@ def read_windows_credential(slot):
     if slot.startswith("claude-cockpit-spare-"):
         return None
     allowed = {FLEET_SLOT} | {slot_for(os.path.join(BASE, n)) for n in profiles()}
-    if slot not in allowed:
+    # expanduser on Windows can preserve '/' while pathlib/CLI callers use '\\'.
+    # Match native separator/case semantics, but always open the allowlisted path,
+    # never the caller's spelling (or an arbitrary path made absolute for it).
+    by_key = {ntpath.normcase(ntpath.normpath(path)): path for path in allowed}
+    trusted_path = by_key.get(ntpath.normcase(ntpath.normpath(slot)))
+    if trusted_path is None:
         raise CredentialReadError("Unrecognized credential store; refusing to guess.")
     try:
-        with open(slot, encoding="utf-8-sig") as f:
+        with open(trusted_path, encoding="utf-8-sig") as f:
             value = json.load(f)
     except FileNotFoundError:
         return None

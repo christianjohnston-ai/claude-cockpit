@@ -53,6 +53,8 @@ import json, os, sys, time, datetime, importlib.util, glob
 sys.dont_write_bytecode = True   # gotcha #13
 
 BASE = os.path.expanduser("~/.claude-profiles")
+if sys.platform == "win32":
+    BASE = os.path.normpath(BASE)
 METERS = os.path.join(BASE, "meters.jsonl")
 TOKENS = os.path.join(BASE, "token_hours.json")
 FORECAST = os.path.join(BASE, "forecast.json")

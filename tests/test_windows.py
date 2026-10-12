@@ -8,13 +8,14 @@ import contextlib
 import importlib.util
 import io
 import json
+import ntpath
 import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, mock_open
 import urllib.request
 
 sys.dont_write_bytecode = True
@@ -80,6 +81,29 @@ class WindowsRuntimeTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), before)
         self.assertIsNone(self.swap.Keychain().read("claude-cockpit-spare-work"))
         self.process.assert_not_called()
+
+    def test_windows_separator_aliases_open_only_allowlisted_store(self):
+        # Reproduce Windows expanduser's mixed separators even on a POSIX host.
+        mixed_base = r"C:\Users\Fixture/.claude-profiles"
+        with patch.object(self.switch, "BASE", mixed_base), \
+                patch.object(self.switch, "profiles", return_value=["work"]):
+            trusted = self.switch.slot_for(os.path.join(mixed_base, "work"))
+            native = ntpath.join(ntpath.normpath(mixed_base), "work", ".credentials.json")
+            content = {"claudeAiOauth": {"refreshToken": "fixture-only"}}
+            for spelling in (native, native.replace("\\", "/"), native.upper()):
+                with patch("builtins.open", mock_open(read_data=json.dumps(content))) as reader:
+                    self.assertEqual(self.switch.read_windows_credential(spelling), content)
+                    # Normalization only selects an existing allowlist entry. The
+                    # caller's alternate casing/spelling is never used for I/O.
+                    reader.assert_called_once_with(trusted, encoding="utf-8-sig")
+            for denied in (ntpath.join(ntpath.dirname(native), "other.json"),
+                           ntpath.join(mixed_base, "other", ".credentials.json"),
+                           ntpath.join(mixed_base, "work", "..", "other", ".credentials.json"),
+                           r"C:Users\Fixture\.claude-profiles\work\.credentials.json"):
+                with patch("builtins.open") as reader:
+                    with self.assertRaises(self.switch.CredentialReadError):
+                        self.switch.read_windows_credential(denied)
+                    reader.assert_not_called()
 
     def test_missing_is_empty_but_corrupt_and_denied_fail_closed(self):
         directory, _ = self.profile()

@@ -61,6 +61,8 @@ import json, os, sys, time, datetime, subprocess, importlib.util
 import sys as _sys; _sys.dont_write_bytecode = True  # gotcha #13
 
 BASE = os.path.expanduser("~/.claude-profiles")
+if sys.platform == "win32":
+    BASE = os.path.normpath(BASE)
 CFG_FILE = os.path.join(BASE, "autoswitch.json")
 LOG = os.path.join(BASE, "autoswitch.log")
 SWAP = os.path.join(BASE, "claude-swap.py")

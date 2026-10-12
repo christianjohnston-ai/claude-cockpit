@@ -79,6 +79,8 @@ import urllib.request, urllib.error, importlib.util
 sys.dont_write_bytecode = True   # gotcha #13/#30: __pycache__ became a fake profile once
 
 BASE = os.path.expanduser("~/.claude-profiles")
+if sys.platform == "win32":
+    BASE = os.path.normpath(BASE)
 USER = os.environ.get("USER", "")
 SHARED_SLOT = "Claude Code-credentials"
 SPARE_PREFIX = "claude-cockpit-spare-"

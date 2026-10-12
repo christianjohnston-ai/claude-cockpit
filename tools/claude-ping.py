@@ -41,12 +41,16 @@ import sys as _sys; _sys.dont_write_bytecode = True  # gotcha #13: no __pycache_
 from concurrent.futures import ThreadPoolExecutor
 
 BASE = os.path.expanduser("~/.claude-profiles")
+if sys.platform == "win32":
+    BASE = os.path.normpath(BASE)
 # SYNC WARNING: must stay the installer-maintained symlink, never a version path.
 # `claude` on PATH can resolve to a terminal app's shim or to a stale install that
 # predates `auth status` entirely.
 # COCKPIT_CLAUDE_BIN overrides it for installs that live elsewhere; the full list of
 # places this lookup is repeated is in claude-switch.py next to CLAUDE_BIN.
 CLAUDE = os.environ.get("COCKPIT_CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude.exe" if sys.platform == "win32" else "~/.local/bin/claude")
+if sys.platform == "win32":
+    CLAUDE = os.path.normpath(CLAUDE)
 
 # Smallest useful payload. The point is to make ONE billable request, not to get
 # an answer, so the prompt asks for a single token back. Deliberately NO --model

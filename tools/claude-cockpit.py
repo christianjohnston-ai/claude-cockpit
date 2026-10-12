@@ -47,10 +47,14 @@ sys.dont_write_bytecode = True  # keeps __pycache__ out of the profiles dir (got
 from concurrent.futures import ThreadPoolExecutor
 
 BASE = os.path.expanduser("~/.claude-profiles")
+if sys.platform == "win32":
+    BASE = os.path.normpath(BASE)
 # Never bare `claude`: a PATH lookup can land on a terminal app's shim or a stale install.
 # SYNC WARNING: same two-step lookup as claude-switch.py CLAUDE_BIN (the full list of
 # copies is in the comment there). Change them together.
 CLAUDE = os.environ.get("COCKPIT_CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude.exe" if sys.platform == "win32" else "~/.local/bin/claude")
+if sys.platform == "win32":
+    CLAUDE = os.path.normpath(CLAUDE)
 SWITCH = os.path.join(BASE, "claude-switch.py")
 
 # Import claude-switch as a module for fleet_anchor() / fleet_switch() /
