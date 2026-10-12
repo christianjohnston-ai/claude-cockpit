@@ -5,6 +5,10 @@
 param([string]$Python)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# PS7 can turn nonzero native exits into terminating errors. This suite asserts
+# every expected native result itself, including intentional exit 1 and exit 23.
+# Script scope leaves the caller's preference unchanged; harmless on PS5.1.
+$PSNativeCommandUseErrorActionPreference = $false
 if ($env:OS -ne 'Windows_NT') { throw 'Run this test on native Windows.' }
 $Repository = Split-Path -Parent $PSScriptRoot
 $Installer = Join-Path $Repository 'install.ps1'
@@ -65,8 +69,11 @@ try {
     Assert-True (@($FreshConfig.PSObject.Properties).Count -eq 0) 'Fresh profile inherited settings.'
     Assert-True ($env:CLAUDE_CONFIG_DIR -eq 'sentinel-parent-config') 'Parent environment was changed.'
     # Exercise generated CMD path/exit propagation without running real Claude.
-    & (Join-Path $InstallRoot 'bin\claude-verify.cmd')
-    Assert-True ($LASTEXITCODE -ne 0) 'Verify accepted a nonexistent fake Claude executable.'
+    $VerifyOutput = & (Join-Path $InstallRoot 'bin\claude-verify.cmd')
+    $VerifyExitCode = $LASTEXITCODE
+    $VerifyOutput | Write-Output
+    Assert-True ($VerifyExitCode -eq 1) 'Verify did not return the expected diagnostic failure exit 1.'
+    Assert-True ($VerifyOutput -contains 'FAIL: native Claude executable') 'Verify failed for an unexpected reason.'
     # Compile an offline, credential-free CLI stub when the Windows C# compiler
     # is present. No downloads and no Add-Type-generated host dependency.
     $Compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
@@ -88,14 +95,20 @@ public static class Stub {
         Assert-True ($LASTEXITCODE -eq 0) 'Offline stub compilation failed.'
         $env:COCKPIT_CLAUDE_BIN = $Stub
         $Output = & (Join-Path $InstallRoot 'bin\claude-as.cmd') personal 'argument with spaces' --exit-23
-        Assert-True ($LASTEXITCODE -eq 23) 'CMD launcher lost the child exit code.'
+        $StubExitCode = $LASTEXITCODE
+        Assert-True ($StubExitCode -eq 23) 'CMD launcher lost the child exit code.'
         Assert-True ($Output -contains 'ARG=argument with spaces') 'CMD launcher lost an argument boundary.'
         Assert-True ($Output -contains ('CONFIG=' + (Join-Path $InstallRoot 'personal'))) 'Child profile environment is wrong.'
         Assert-True ($env:CLAUDE_CONFIG_DIR -eq 'sentinel-parent-config') 'Launcher changed parent environment.'
     } else { Write-Warning 'SKIP: C# compiler absent; native Claude stub/argv test was not run.' }
-    Write-Host 'PASS: offline Windows installer fixtures (TUI, pip download and live login not tested).'
 } finally {
     foreach ($Name in $Saved.Keys) { [Environment]::SetEnvironmentVariable($Name, $Saved[$Name], 'Process') }
     # Delete only the unique test tree, never a real profile or interpreter.
     if (Test-Path -LiteralPath $Fixture) { Remove-Item -LiteralPath $Fixture -Recurse -Force }
 }
+
+# Reached only after all assertions AND fixture cleanup succeeded. Expected
+# negative commands leave LASTEXITCODE nonzero; do not let CI wrappers mistake
+# that stale child status for the result of the complete test suite.
+Write-Host 'PASS: offline Windows installer fixtures (TUI, pip download and live login not tested).'
+exit 0
