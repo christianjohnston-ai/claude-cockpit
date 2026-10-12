@@ -24,7 +24,8 @@ jobs:
           python-version: '3.12'
       - name: Windows terminal dependency
         if: runner.os == 'Windows'
-        run: python -m pip install --only-binary=:all: --no-deps --index-url https://pypi.org/simple -r requirements-windows.txt
+        run: |
+          python -m pip install --only-binary=:all: --no-deps --index-url https://pypi.org/simple -r requirements-windows.txt
       - name: Offline fixtures (no real accounts)
         run: python tests/run_offline.py
       - name: Windows PowerShell 5.1 installer smoke
