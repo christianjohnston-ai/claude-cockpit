@@ -541,7 +541,7 @@ def fmt_when(h, at=None):
     if h is None:
         return "never (next 7 days)"
     t = datetime.datetime.fromtimestamp((at or now_ts()) + h * 3600)
-    return f"{t.strftime('%a %-I:%M%p').replace('AM', 'am').replace('PM', 'pm')} (in {h:.0f}h)"
+    return f"{t.strftime('%a %#I:%M%p' if sys.platform == 'win32' else '%a %-I:%M%p').replace('AM', 'am').replace('PM', 'pm')} (in {h:.0f}h)"
 
 
 def main():

@@ -1,15 +1,28 @@
 # claude-cockpit
 
-claude-cockpit is a set of macOS command-line tools for people who use Claude Code with more than
+claude-cockpit is a set of command-line tools for people who use Claude Code with more than
 one Claude subscription account (or with one account, to watch its usage). It gives each account
 its own profile: a settings folder with its own login in the macOS keychain. It shows every
 account's usage (the 5-hour window, the weekly limit and the per-model weekly limit) on one
 terminal screen. And it lets you move all your running Claude Code sessions onto a different
 account.
 
+## Windows preview
+
+Native Windows support is experimental. Start with [the Windows installation and
+support guide](docs/windows.md): a per-user PowerShell installer, an isolated Python
+environment, the usage dashboard, and separate Claude profile launchers. The macOS
+instructions below remain unchanged.
+
+Windows does **not** enable credential hot-swap or automatic fleet switching. A
+profile login uses Claude Code's own browser flow; it does not move an existing
+session to another account. Offline tests do not establish live Windows login or
+terminal compatibility. See the guide for the validation checklist and limits.
+
 Read this before you install:
 
-- **macOS only.** The tools use the macOS keychain (`security`), `launchd` and `open`.
+- **macOS is the original supported platform.** Its tools use the macOS keychain
+  (`security`), `launchd` and `open`. Windows uses the separate preview above.
 - **Unofficial.** This project is not affiliated with, endorsed by or supported by Anthropic.
 - **It depends on Claude Code internals** (keychain item names, the `.claude.json` file, the
   `/usage` report, two OAuth read endpoints). Any Claude Code update can change them and break

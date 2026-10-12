@@ -46,7 +46,7 @@ BASE = os.path.expanduser("~/.claude-profiles")
 # predates `auth status` entirely.
 # COCKPIT_CLAUDE_BIN overrides it for installs that live elsewhere; the full list of
 # places this lookup is repeated is in claude-switch.py next to CLAUDE_BIN.
-CLAUDE = os.environ.get("COCKPIT_CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude")
+CLAUDE = os.environ.get("COCKPIT_CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude.exe" if sys.platform == "win32" else "~/.local/bin/claude")
 
 # Smallest useful payload. The point is to make ONE billable request, not to get
 # an answer, so the prompt asks for a single token back. Deliberately NO --model
@@ -76,7 +76,7 @@ def is_cold(r):
     Returns True for a missing timestamp (never opened, or the cache was wiped by
     an account change) and for an expired one (window already elapsed). Both are
     states where the clock is not running."""
-    if not r:
+    if not r or r.get("credential_error"):
         return False
     ra = r.get("five_at")
     if not ra:
@@ -148,6 +148,8 @@ def _run(name, args):
     cwd is forced to $HOME so no project CLAUDE.md is picked up from wherever the
     caller happened to be standing — a ping fired from a repo would silently cost
     that repo's whole context."""
+    if ckpit.credential_status(name):
+        raise RuntimeError("Profile credential store is missing or unreadable; no ping was sent.")
     env = dict(os.environ)
     # Set explicitly rather than inherit: this may run from a shell that already
     # exports CLAUDE_CONFIG_DIR (a claude-as session), which would otherwise ping
@@ -209,7 +211,7 @@ def ckpit_when(iso):
     except Exception:
         return "—"
     hrs = (t - datetime.datetime.now().astimezone()).total_seconds() / 3600
-    return f"{t.strftime('%-I:%M%p').lower()} ({hrs:.1f}h)"
+    return f"{t.strftime('%#I:%M%p' if sys.platform == 'win32' else '%-I:%M%p').lower()} ({hrs:.1f}h)"
 
 
 def refresh(name):
@@ -231,7 +233,8 @@ def main():
 
     names = profiles()
     if not names:
-        print("No profiles. Create one: bash ~/.claude-profiles/new-profile.sh <name>")
+        print("No profiles. Create one: " + ("claude-new-profile <name>" if sys.platform == "win32" else
+                                             "bash ~/.claude-profiles/new-profile.sh <name>"))
         return 1
 
     if argv:

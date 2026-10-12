@@ -38,7 +38,11 @@ SWITCHING (v4, 2026-08-17 evening — see claude-switch.py's docstring for histo
   can no longer destroy a credential: every account keeps a permanent anchor
   login in its own profile slot, so the fleet grant is always expendable.
 """
-import curses, json, os, subprocess, sys, time, datetime, importlib.util, threading
+import json, os, subprocess, sys, time, datetime, importlib.util, threading
+try:
+    import curses
+except ImportError:
+    raise SystemExit("Cockpit needs curses. On Windows install windows-curses in the cockpit Python environment.") from None
 sys.dont_write_bytecode = True  # keeps __pycache__ out of the profiles dir (gotcha #13)
 from concurrent.futures import ThreadPoolExecutor
 
@@ -46,7 +50,7 @@ BASE = os.path.expanduser("~/.claude-profiles")
 # Never bare `claude`: a PATH lookup can land on a terminal app's shim or a stale install.
 # SYNC WARNING: same two-step lookup as claude-switch.py CLAUDE_BIN (the full list of
 # copies is in the comment there). Change them together.
-CLAUDE = os.environ.get("COCKPIT_CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude")
+CLAUDE = os.environ.get("COCKPIT_CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude.exe" if sys.platform == "win32" else "~/.local/bin/claude")
 SWITCH = os.path.join(BASE, "claude-switch.py")
 
 # Import claude-switch as a module for fleet_anchor() / fleet_switch() /
@@ -71,7 +75,7 @@ _spec.loader.exec_module(cswitch)
 # match across a round trip, and an agent trying to obey it would strand this
 # key disarmed forever. verify.sh's D3 gates check the same property on every
 # run instead. The operative conditions are stated below.
-SWITCH_PROVEN_ON = "2026-08-17"   # v4: the key launches an aimed browser login
+SWITCH_PROVEN_ON = "" if cswitch.IS_WINDOWS else "2026-08-17"   # v4: the key launches an aimed browser login
 # COCKPIT v2 gate for the NO-BROWSER swap the 1-9 key now tries first. Same
 # rule as above (gotcha #19): earned by a successful run BY HAND before the key
 # was wired — `claude-swap ops`, 2026-10-01 20:37, verified by the
@@ -79,7 +83,7 @@ SWITCH_PROVEN_ON = "2026-08-17"   # v4: the key launches an aimed browser login
 # browser login only. Any change to claude-swap.py's move/restore code means
 # blanking this and re-earning it: run tests/test_claude_swap.py
 # (must be all PASS) and one live swap by hand.
-SWAP_PROVEN_ON = "2026-10-01"
+SWAP_PROVEN_ON = "" if cswitch.IS_WINDOWS else "2026-10-01"
 SWAP = os.path.join(BASE, "claude-swap.py")
 # WHAT THIS GATES NOW (v4). The 1-9 key no longer performs a credential
 # operation itself — it launches the official `claude auth login`, aimed at the
@@ -236,6 +240,18 @@ def active_profile(force=False):
     return n
 
 
+def credential_status(name):
+    """Native stores never fall back to the fleet; corrupt is not signed out."""
+    if not cswitch.IS_WINDOWS:
+        return None
+    try:
+        if not cswitch.has_claude_login(cswitch.slot_for(os.path.join(BASE, name))):
+            return "missing"
+    except cswitch.CredentialReadError:
+        return "unreadable"
+    return None
+
+
 def read(name):
     prof_path = os.path.join(BASE, name, ".claude.json")
     try:
@@ -267,6 +283,9 @@ def read(name):
         prof = dict(prof)
         prof["cachedUsageUtilization"] = LIVE[name]
     r = parse_usage(prof, name)
+    r["credential_error"] = credential_status(name)
+    if r["credential_error"]:
+        REFRESH_STATUS[name] = r["credential_error"]
     r["borrowed"] = name in LIVE
     r["login_expires"] = login_deadline(name)
     r["is_active_acct"] = (name == active_profile())
@@ -374,7 +393,12 @@ def refresh_borrowed(name):
 
 
 def refresh_one(name):
-    if not cswitch.has_claude_login(cswitch.slot_for(os.path.join(BASE, name))):
+    native_error = credential_status(name)
+    if native_error:
+        LIVE.pop(name, None)
+        REFRESH_STATUS[name] = native_error
+        return native_error
+    if not cswitch.IS_WINDOWS and not cswitch.has_claude_login(cswitch.slot_for(os.path.join(BASE, name))):
         REFRESH_STATUS[name] = refresh_borrowed(name)
         return REFRESH_STATUS[name]
     LIVE.pop(name, None)
@@ -469,6 +493,8 @@ def auto_armed():
     only when an account ran dry and nothing moved. The header must say which of the
     two it is. SYNC WARNING: same rule as claude-autoswitch.py cfg() (auto_swap is
     forced off unless swap_enabled is true)."""
+    if cswitch.IS_WINDOWS:
+        return False
     try:
         c = json.load(open(AUTOCFG))
         return c.get("auto_swap") is True and c.get("swap_enabled") is True
@@ -561,7 +587,7 @@ def when(iso, hours=True):
     h = (t - datetime.datetime.now().astimezone()).total_seconds() / 3600
     if h < 0:
         return "due"
-    stamp = t.strftime("%-I:%M%p").lower() if h < 24 else t.strftime("%a %-I%p").lower()
+    stamp = t.strftime("%#I:%M%p" if sys.platform == "win32" else "%-I:%M%p").lower() if h < 24 else t.strftime("%a %#I%p" if sys.platform == "win32" else "%a %-I%p").lower()
     return f"{stamp} ({h:.0f}h)" if hours else stamp
 
 
@@ -613,6 +639,11 @@ class UI:
         if not getattr(s, "_borrow_primed", False):
             s._borrow_primed = True
             for n in profiles():
+                if cswitch.IS_WINDOWS:
+                    error = credential_status(n)
+                    if error:
+                        REFRESH_STATUS[n] = error
+                    continue
                 if n not in LIVE and not cswitch.has_claude_login(cswitch.slot_for(os.path.join(BASE, n))):
                     REFRESH_STATUS[n] = refresh_borrowed(n)
         s.rows = [r for r in (read(n) for n in profiles()) if r]
@@ -662,6 +693,10 @@ class UI:
         """The one-line truth about whether this row's numbers can be believed.
         Returns (text, attr) or None when the row is fresh and healthy."""
         st, age = r.get("status"), r.get("age")
+        if st == "unreadable":
+            return ("Credential store unreadable — usage is unverified; inspect permissions/data", s.BAD | curses.A_BOLD)
+        if st == "missing":
+            return (f"No stored profile login — claude-login {r['name']}", s.BAD | curses.A_BOLD)
 
         # WHY three messages where there was one (2026-08-14): the original
         # collapsed "failed" and "timeout" into a single line asserting
@@ -708,7 +743,7 @@ class UI:
             return (f"{age:.0f} min old", s.WARN)
         le = r.get("login_expires")
         if le and 0 < le - time.time() < 72 * 3600:
-            d = datetime.datetime.fromtimestamp(le).strftime("%a %-I:%M%p").replace("AM", "am").replace("PM", "pm")
+            d = datetime.datetime.fromtimestamp(le).strftime("%a %#I:%M%p" if sys.platform == "win32" else "%a %-I:%M%p").replace("AM", "am").replace("PM", "pm")
             return (f"⚠ run claude-login {r['name']} before {d} ({(le - time.time()) / 3600:.0f}h): "
                     f"this login can't renew after that", s.WARN | curses.A_BOLD)
         if r.get("borrowed"):
@@ -740,7 +775,7 @@ class UI:
         # One lane again: the shared slot is the FLEET — sessions, new terminals
         # and scheduled jobs all follow it, so the header names exactly that.
         _an = active_profile()
-        s.put(0, 17, f"FLEET: {s.em(s.cur) or '(signed out?)'}"
+        s.put(0, 17, f"{'DEFAULT' if cswitch.IS_WINDOWS else 'FLEET'}: {s.em(s.cur) or '(signed out?)'}"
                      + (f"  ({_an})" if _an else "  (no anchor profile)"), s.ACC)
 
         # AUTO-SWITCH line. Must never imply it is working when no watcher runs.
@@ -890,7 +925,9 @@ class UI:
             if not best.get("live"):
                 how = ("no-browser swap; browser only if it must" if swap_on()
                        else "opens the normal browser sign-in")
-                s.put(y + 1, 0, f"  press {s.rows.index(best)+1} — moves everything ({how})", s.ACC)
+                advice = (f"  new pinned session: claude-as {best['name']}" if cswitch.IS_WINDOWS else
+                          f"  press {s.rows.index(best)+1} — moves everything ({how})")
+                s.put(y + 1, 0, advice, s.ACC)
                 y += 1
             y += 1
 
@@ -942,6 +979,8 @@ class UI:
             # Short form for narrow terminals. WHY: put() cuts the end of a line, and
             # the end of the long form is "q quit".
             hint = f"{keys} switch · u undo · p ping · a auto · e emails · r refresh · q quit"
+        if cswitch.IS_WINDOWS:
+            hint = "p ping · a alerts · e emails · r refresh · q quit · login: use CLI"
         if s.refreshing:
             stamp = "refreshing… (free, no quota)"
         elif not s.last:
@@ -1007,7 +1046,7 @@ class UI:
                 txt, col = "enough until the refills", s.OK
             else:
                 dry = datetime.datetime.fromtimestamp(f["ts"] + sc["first_dry_h"] * 3600)
-                txt = (f"runs dry {dry.strftime('%a %-I:%M%p').replace('AM','am').replace('PM','pm')} "
+                txt = (f"runs dry {dry.strftime('%a %#I:%M%p' if sys.platform == 'win32' else '%a %-I:%M%p').replace('AM','am').replace('PM','pm')} "
                        f"(in {sc['first_dry_h']:.0f}h) · blocked {sc['blocked_h']:.0f}h of next 7 days")
                 col = s.BAD if sc["first_dry_h"] < 24 else s.WARN
             s.put(y, 2, f"{name:>3} pace {p['v']:5.1f} pts/h{tag}", curses.A_BOLD)
@@ -1201,7 +1240,8 @@ class UI:
                     "No accounts yet.",
                     "",
                     "Add each Claude account you use, one at a time:",
-                    "  bash ~/.claude-profiles/new-profile.sh personal",
+                    ("  claude-new-profile personal" if cswitch.IS_WINDOWS else
+                     "  bash ~/.claude-profiles/new-profile.sh personal"),
                     "  claude-login personal",
                     "",
                     "Then run claude-cockpit again.   Press any key to close."]):
@@ -1233,6 +1273,7 @@ class UI:
                 s.msg = err or ("auto-switch ON — but NO WATCHER is running, so nothing will happen"
                                 if st == "dead" else
                                 "auto-switch ARMED: it will swap once at the threshold" if en and auto_armed() else
+                                "alerts ON; Windows auto-swap is unsupported" if en and cswitch.IS_WINDOWS else
                                 "alerts ON. It will NOT swap by itself: arm once with claude-autoswitch --arm"
                                 if en else "auto-switch OFF")
             elif k in (ord("e"), ord("E")):
@@ -1251,6 +1292,9 @@ class UI:
                 # and costs less than the 1% rounding floor of the 5h meter.
                 s.bg_ping()
             elif k in (ord("u"), ord("U")):
+                if cswitch.IS_WINDOWS:
+                    s.msg = "Windows: use claude-switch --undo in a plain terminal; cockpit login keys are unverified"
+                    continue
                 # Undo is a fleet switch back to the previous account, which in
                 # this design is another aimed browser login — same suspend
                 # dance as confirm(), same "a login may have happened" honesty.
@@ -1289,7 +1333,8 @@ class UI:
                 s.load()
             elif ord("1") <= k <= ord("9"):
                 if not SWITCH_PROVEN_ON:
-                    s.msg = ("switching is DISABLED — a credential mutation was "
+                    s.msg = ("Windows: use claude-switch <name> in a plain terminal" if cswitch.IS_WINDOWS else
+                             "switching is DISABLED — a credential mutation was "
                              "reintroduced into claude-switch.py. Use claude-as <name>, "
                              "and run verify.sh (D3) to see what tripped.")
                 else:

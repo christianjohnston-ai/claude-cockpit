@@ -1,0 +1,37 @@
+name: Offline portability tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Windows terminal dependency
+        if: runner.os == 'Windows'
+        run: python -m pip install --only-binary=:all: --no-deps --index-url https://pypi.org/simple -r requirements-windows.txt
+      - name: Offline fixtures (no real accounts)
+        run: python tests/run_offline.py
+      - name: Windows PowerShell 5.1 installer smoke
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\tests\test_windows_installer.ps1 -Python (Get-Command python.exe).Source
+      - name: PowerShell 7 installer smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\tests\test_windows_installer.ps1 -Python (Get-Command python.exe).Source

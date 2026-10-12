@@ -135,6 +135,8 @@ def swap_enabled(path=None):
     SYNC WARNING: three callers enforce this and must keep agreeing: main() below,
     claude-cockpit.py (number keys skip the swap and use the browser login) and
     claude-autoswitch.py cfg() (auto_swap is forced off)."""
+    if cswitch.IS_WINDOWS:
+        return False  # Native credential moves have not been validated. No opt-in bypass.
     try:
         return json.load(open(path or SWAP_CFG)).get("swap_enabled") is True
     except Exception:
@@ -143,6 +145,9 @@ def swap_enabled(path=None):
 
 def _require_enabled():
     """Exit 1 (refused, nothing changed) when the user has not opted in to swapping."""
+    if cswitch.IS_WINDOWS:
+        print("Native Windows credential swapping is unsupported; use claude-login or claude-as.", file=sys.stderr)
+        sys.exit(1)
     if swap_enabled():
         return
     print("Swapping is turned off, so nothing was changed.\n"
@@ -205,6 +210,11 @@ def _guard_slot(svc):
 
 class Keychain:
     def read(self, svc):
+        if cswitch.IS_WINDOWS:
+            try:
+                return cswitch.read_windows_credential(svc)
+            except cswitch.CredentialReadError:
+                raise CorruptSlot("Windows credential file is unreadable") from None
         _guard_slot(svc)
         r = subprocess.run(["security", "find-generic-password", "-a", USER, "-s", svc, "-w"],
                            capture_output=True, text=True)
@@ -218,6 +228,8 @@ class Keychain:
             raise CorruptSlot(svc)
 
     def write(self, svc, blob):
+        if cswitch.IS_WINDOWS:
+            raise SwapError("Native Windows credential writes are unsupported; nothing changed.")
         _guard_slot(svc)
         hexed = json.dumps(blob, separators=(",", ":")).encode().hex()
         cmd = f'add-generic-password -U -a "{USER}" -s "{svc}" -X "{hexed}"'
@@ -229,6 +241,8 @@ class Keychain:
         return r.returncode == 0
 
     def delete(self, svc):
+        if cswitch.IS_WINDOWS:
+            raise SwapError("Native Windows credential writes are unsupported; nothing changed.")
         _guard_slot(svc)
         r = subprocess.run(["security", "delete-generic-password", "-a", USER, "-s", svc],
                            capture_output=True, text=True)
@@ -648,6 +662,8 @@ class Swapper:
 
     # --- the swap ----------------------------------------------------------------
     def swap(self, target, dry_run=False):
+        if cswitch.IS_WINDOWS:
+            raise SwapError("Native Windows swapping (including dry-run) is unsupported; use claude-as.")
         if not cswitch.valid_name(target) or target not in self.profiles():
             raise SwapError(f"No such profile: {target}")
         target_ident = self.profile_identity(target)
@@ -812,6 +828,13 @@ class Swapper:
 def main():
     args = sys.argv[1:]
     s = Swapper()
+    if cswitch.IS_WINDOWS and not args:
+        print("Native Windows hot-swap is unsupported. Default-login status follows.")
+        try:
+            return cswitch.show()
+        except cswitch.CredentialReadError as error:
+            print(str(error), file=sys.stderr)
+            sys.exit(5)
     try:
         if not args:
             s.status()

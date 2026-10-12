@@ -103,7 +103,8 @@ def cfg():
     not a rule.
     """
     try:
-        raw = json.load(open(CFG_FILE))
+        with open(CFG_FILE, encoding="utf-8-sig") as f:
+            raw = json.load(f)
     except Exception as e:
         log(f"FATAL: {CFG_FILE} is unreadable ({e}).")
         log("       Refusing to run — without a valid exclusion list every account "
@@ -128,7 +129,7 @@ def cfg():
     # place every caller reads the config from makes that combination inert.
     # `is True` on purpose: the string "true" or the number 1 is not consent.
     # SYNC WARNING: same rule as claude-swap.py swap_enabled().
-    c["swap_enabled"] = raw.get("swap_enabled") is True
+    c["swap_enabled"] = not cswitch.IS_WINDOWS and raw.get("swap_enabled") is True
     if not c["swap_enabled"]:
         c["auto_swap"] = False
 
@@ -174,6 +175,9 @@ def log(msg):
 
 
 def notify(title, body):
+    if cswitch.IS_WINDOWS:
+        log(f"ALERT: {title}: {body}")  # foreground/log alerts, no macOS executable
+        return
     # osascript, not a dependency. Failure here must never break the watcher.
     try:
         subprocess.run(["osascript", "-e",
