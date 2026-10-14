@@ -1,0 +1,17 @@
+# Runtime state normally lives outside the clone (READER_HOME, default
+# ~/.claude/reader). These names are ignored too in case READER_HOME is pointed
+# inside the clone: the key file types into terminals and must never be committed.
+key
+panes/
+server.pid
+server.log
+.env
+.env.*
+
+__pycache__/
+*.pyc
+.DS_Store
+
+# Throwaway files (test captures, scratch scripts) are named with a -temp suffix.
+*-temp
+*-temp.*

@@ -529,6 +529,13 @@ it stays a separate step that you take yourself.
 - Read the design history in [docs/how_it_works.md](docs/how_it_works.md) before changing how
   logins are handled. Three earlier designs failed in ways that are not obvious from the code.
 
+## Also in this repo: session-reader
+
+[session-reader/](session-reader/) is a separate, free tool for people who run Claude Code inside
+cmux. It shows a session as a readable web page beside the terminal, and its decision cards can type
+your answer back. It shares no files with the cockpit tools above and is installed on its own; see
+[session-reader/README.md](session-reader/README.md).
+
 ## Disclaimer
 
 You are responsible for using your own accounts within Anthropic's terms. This tool only works

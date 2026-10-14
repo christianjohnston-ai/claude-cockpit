@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session Reader</title>
+<!-- The page URL carries the key that types into terminals; never send it to another site as a Referer. -->
+<meta name="referrer" content="no-referrer">
+<!-- Libraries and fonts are served from ./vendor, never a CDN at runtime: this page holds the key that
+     types into the terminal, so a tampered CDN file could type commands, and a font request would tell a
+     third party when you are reading. Hashes recorded in vendor/SHA384.txt.
+     SYNC WARNING: every file named here must also be in VENDOR in reader.py, or the server refuses it. -->
+<link rel="stylesheet" href="/vendor/github-dark.min.css" integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH">
+<script src="/vendor/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi"></script>
+<script src="/vendor/purify.min.js" integrity="sha384-P0JNneQf81HOl9VwNXK76cQ9VMD6Nfsnepxb0cCOg8+UzEdzgPHAPV4wVQrvYQSx"></script>
+<script src="/vendor/highlight.min.js" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp"></script>
+<style>
+/* Self-hosted, unmodified release files; licences in vendor/fonts/*_OFL.txt and THIRD_PARTY_NOTICES.md. */
+@font-face { font-family: "Inter"; src: url("/vendor/fonts/inter_variable.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Lora"; src: url("/vendor/fonts/lora_variable.woff2") format("woff2"); font-weight: 400 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Lora"; src: url("/vendor/fonts/lora_italic_variable.woff2") format("woff2"); font-weight: 400 700; font-style: italic; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("/vendor/fonts/jetbrains_mono_regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("/vendor/fonts/jetbrains_mono_medium.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+/* A warm palette: off-white ink on a warm charcoal ground, one terracotta accent. */
+:root {
+  --bg: #262624; --ink: #F0EEE6; --ink-strong: #FAF9F5; --muted: #B0AEA5; --faint: #8F8D86;
+  --line: #3D3C38; --surface: #30302E; --sunk: #1F1E1D; --user: #1F1E1D;
+  --accent: #D97757; --accent-soft: rgba(217,119,87,.14); --accent-ink: #E8957A;
+  --blue: #6A9BCC; --green: #A3BA87; --red: #EC8A73;
+  --add-bg: #28321F; --del-bg: #3B2420;
+  --serif: "Lora", Georgia, serif; --sans: "Inter", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #FAF9F5; --ink: #1F1E1D; --ink-strong: #141413; --muted: #5E5D59; --faint: #6F6D66;
+    --line: #E8E6DC; --surface: #F0EEE6; --sunk: #F5F4EE; --user: #F0EEE6;
+    --accent: #B05532; --accent-soft: rgba(176,85,50,.10); --accent-ink: #A84F2E;
+    --blue: #3F6E9E; --green: #4F6338; --red: #B4432C; --add-bg: #E9F0E1; --del-bg: #F9E7E1;
+    color-scheme: light;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body { font: 15px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+.top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
+header { display: flex; align-items: center; gap: 12px; padding: 14px 24px; }
+#strip { display: flex; gap: 6px; align-items: center; padding: 0 24px 10px; overflow-x: auto; scrollbar-width: none; }
+#strip[hidden] { display: none; }
+.ws { font: 500 12px var(--sans); color: var(--faint); white-space: nowrap; margin-right: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 7px; max-width: 220px; flex: 0 0 auto; background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; font: 500 12.5px var(--sans); cursor: pointer; }
+.chip span.t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.on { color: var(--ink-strong); border-color: var(--accent); background: var(--accent-soft); }
+.cdot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+.cdot.w { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.mark { color: var(--accent); font: 600 21px/1 var(--serif); }
+.title { font: 600 15px/1.3 var(--sans); color: var(--ink-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.where { font: 12.5px var(--sans); color: var(--faint); white-space: nowrap; }
+.live { margin-left: auto; display: flex; align-items: center; gap: 7px; font: 500 12.5px var(--sans); color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.live.on .dot { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
+main { max-width: 760px; margin: 0 auto; padding: 28px 16px 140px; }
+.turn { margin: 0 0 30px; }
+.user { display: flex; gap: 12px; align-items: flex-start; margin: 34px 0 22px; }
+.avatar { flex: 0 0 28px; height: 28px; border-radius: 50%; background: var(--surface); border: 1px solid var(--line); color: var(--muted); display: flex; align-items: center; justify-content: center; }
+.bubble { background: var(--user); border-radius: 14px; padding: 10px 15px; max-width: 100%; font: 15px/1.55 var(--sans); color: var(--ink-strong); white-space: pre-wrap; overflow-wrap: anywhere; }
+.bubble .queued { display: block; font-size: 11.5px; color: var(--faint); margin-bottom: 4px; }
+.thumbs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.thumbs img { max-height: 180px; max-width: 100%; border-radius: 8px; border: 1px solid var(--line); cursor: zoom-in; }
+.note { text-align: center; font: 12px var(--sans); color: var(--faint); margin: 10px 0; overflow-wrap: anywhere; }
+.reply { font: 17px/1.68 var(--serif); color: var(--ink); margin: 0 0 14px; overflow-wrap: anywhere; }
+.reply.first::before { content: ""; display: block; width: 18px; height: 3px; border-radius: 2px; background: var(--accent); margin: 4px 0 14px; }
+.reply p { margin: 0 0 .85em; }
+.reply strong { color: var(--ink-strong); font-weight: 600; }
+.reply h1, .reply h2, .reply h3 { font-family: var(--serif); color: var(--ink-strong); font-weight: 600; line-height: 1.3; margin: 1.3em 0 .5em; }
+.reply h1 { font-size: 1.45em; } .reply h2 { font-size: 1.25em; } .reply h3 { font-size: 1.08em; }
+.reply ul, .reply ol { padding-left: 1.35em; margin: 0 0 .9em; }
+.reply li { margin: .28em 0; } .reply li::marker { color: var(--faint); }
+.reply a { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; }
+.reply code { font: .84em var(--mono); background: var(--surface); color: var(--accent-ink); padding: 2px 6px; border-radius: 5px; }
+.reply pre { position: relative; background: var(--sunk); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; overflow: auto; margin: 0 0 1em; }
+.reply pre code { background: none; color: inherit; padding: 0; font-size: 13px; line-height: 1.55; }
+.copy { position: absolute; top: 8px; right: 8px; font: 500 11.5px var(--sans); color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; cursor: pointer; opacity: 0; transition: opacity .15s; }
+.reply pre:hover .copy { opacity: 1; }
+.reply table { width: 100%; border-collapse: collapse; margin: .4em 0 1.1em; font: 14px/1.45 var(--sans); }
+.reply th { text-align: left; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); padding: 8px 12px 8px 0; }
+.reply td { border-bottom: 1px solid var(--line); padding: 9px 12px 9px 0; vertical-align: top; }
+.reply blockquote { margin: 0 0 1em; padding-left: 14px; border-left: 3px solid var(--line); color: var(--muted); }
+/* the GOAL / PAYLOAD block, as a quiet brief */
+.brief { font: 13.5px/1.5 var(--sans); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin: 0 0 18px; display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; }
+.brief dt { color: var(--faint); font-weight: 500; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; padding-top: 2px; }
+.brief dd { margin: 0; color: var(--muted); }
+.brief dt.goal + dd { color: var(--ink-strong); font-weight: 500; }
+/* tool activity */
+.tools { margin: 6px 0 16px; font: 13.5px/1.45 var(--sans); }
+.tools > .t-row { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); cursor: pointer; padding: 5px 10px 5px 8px; border-radius: 8px; border: 1px solid transparent; user-select: none; }
+.tools > .t-row:hover { background: var(--surface); border-color: var(--line); }
+.chev { display: inline-block; transition: transform .15s; color: var(--faint); font-size: 11px; }
+.tools.open > .t-row .chev { transform: rotate(90deg); }
+.spin { width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.t-err { color: var(--red); }
+.t-list { display: none; margin: 8px 0 0 6px; padding-left: 14px; border-left: 2px solid var(--line); }
+.tools.open .t-list { display: block; }
+.tcard { margin: 0 0 12px; }
+.tc-head { display: flex; gap: 8px; align-items: baseline; color: var(--ink); }
+.tc-icon { flex: 0 0 18px; color: var(--faint); font: 500 11px var(--mono); }
+.tcard.edit .tc-icon { color: var(--accent); } .tcard.command .tc-icon { color: var(--blue); }
+.tc-stat { font: 12px var(--mono); margin-left: 4px; } .tc-stat .a { color: var(--green); } .tc-stat .d { color: var(--red); }
+.tc-detail { margin: 4px 0 0 26px; font: 12px/1.5 var(--mono); color: var(--faint); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 90px; overflow: auto; }
+.tc-out { margin: 6px 0 0 26px; font: 12px/1.5 var(--mono); color: var(--muted); background: var(--sunk); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+.tc-out.err { color: var(--red); }
+.diff { margin: 6px 0 0 26px; font: 12px/1.5 var(--mono); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; max-height: 300px; overflow-y: auto; }
+.diff div { padding: 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--faint); }
+.diff .a { background: var(--add-bg); color: var(--ink); } .diff .d { background: var(--del-bg); color: var(--ink); }
+.tc-img { margin: 8px 0 0 26px; } .tc-img img { max-width: 100%; border-radius: 8px; border: 1px solid var(--line); cursor: zoom-in; }
+/* decision cards */
+.decision { font-family: var(--sans); border: 1px solid var(--line); border-radius: 16px; padding: 18px 18px 14px; margin: 6px 0 20px; background: linear-gradient(180deg, var(--surface), transparent 140%); }
+.d-kicker { font: 600 11px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.d-title { font: 600 13px var(--sans); color: var(--muted); margin-left: 8px; }
+.d-q { font: 500 19px/1.4 var(--serif); color: var(--ink-strong); margin: 8px 0 14px; }
+.d-opt { display: flex; width: 100%; gap: 12px; align-items: flex-start; text-align: left; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 0 0 8px; font: inherit; cursor: default; transition: border-color .15s, background .15s; }
+.d-opt:not([disabled]) { cursor: pointer; }
+.d-opt:not([disabled]):hover { border-color: var(--accent); }
+.d-opt.rec { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.d-opt.confirm { border-color: var(--accent); background: var(--accent-soft); }
+.d-opt.chosen { border-color: var(--green); }
+.d-letter { flex: 0 0 26px; height: 26px; border-radius: 8px; background: var(--surface); color: var(--ink-strong); font: 600 13px/26px var(--sans); text-align: center; }
+.d-opt.rec .d-letter { background: var(--accent); color: #141413; }
+.d-body { flex: 1; min-width: 0; }
+.d-label { display: block; font: 600 14.5px/1.4 var(--sans); color: var(--ink-strong); }
+.d-cons { display: block; font: 13.5px/1.5 var(--sans); color: var(--muted); margin-top: 3px; }
+.d-side { flex: 0 0 auto; align-self: center; }
+.d-chip { display: inline-block; margin: 0 0 5px; font: 600 10.5px var(--sans); letter-spacing: .05em; text-transform: uppercase; color: var(--accent-ink); background: var(--accent-soft); border-radius: 999px; padding: 3px 8px; }
+.d-go { font: 600 12px var(--sans); color: var(--accent-ink); visibility: hidden; }
+.d-opt:not([disabled]):hover .d-go, .d-opt.confirm .d-go { visibility: visible; }
+.d-why { font: 13.5px/1.55 var(--sans); color: var(--muted); margin: 10px 2px 8px; }
+.d-why b { color: var(--ink); font-weight: 600; }
+.d-ctx { font: 13px/1.55 var(--sans); color: var(--faint); margin: 0 2px 6px; }
+.d-ctx summary { cursor: pointer; color: var(--muted); font-weight: 500; }
+.d-ctxmd { margin-top: 6px; } .d-ctxmd p { margin: 0 0 .6em; } .d-ctxmd ul, .d-ctxmd ol { margin: 0 0 .6em; padding-left: 1.2em; } .d-ctxmd li { margin: .15em 0; }
+.d-free { display: flex; gap: 8px; margin-top: 10px; }
+.d-free input { flex: 1; min-width: 0; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; font: 14px var(--sans); }
+.d-free input:focus { outline: none; border-color: var(--accent); }
+.d-free button { background: var(--accent); color: #141413; border: 0; border-radius: 10px; padding: 0 16px; font: 600 13.5px var(--sans); cursor: pointer; }
+.d-status { font: 12.5px var(--sans); color: var(--muted); margin-top: 8px; min-height: 1em; }
+.d-status.ok { color: var(--green); } .d-status.bad { color: var(--red); }
+.d-answered { font: 12.5px var(--sans); color: var(--faint); margin-top: 8px; }
+.working { display: flex; align-items: center; gap: 10px; color: var(--muted); font: 14px var(--sans); margin: 8px 0; }
+.working .shimmer { background: linear-gradient(90deg, var(--faint), var(--ink-strong), var(--faint)); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: sh 1.8s linear infinite; }
+@keyframes sh { to { background-position: -200% 0; } }
+#latest { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 6; background: var(--surface); color: var(--ink-strong); border: 1px solid var(--line); border-radius: 999px; padding: 7px 16px; font: 500 13px var(--sans); box-shadow: 0 6px 24px rgba(0,0,0,.25); cursor: pointer; }
+.empty { color: var(--faint); text-align: center; margin-top: 80px; font: 14px var(--sans); }
+@media (max-width: 560px) { header { padding: 12px 16px; } #strip { padding: 0 16px 10px; } .where { display: none; } .reply { font-size: 16px; } .d-opt { flex-wrap: wrap; } .d-side { flex-basis: 100%; padding-left: 38px; } .d-opt:not(.confirm) .d-side { display: none; } }
+.d-you { color: var(--green); font-weight: 600; }
+.reply code, .reply pre, .tc-detail, .tc-out, .diff { font-variant-ligatures: none; }
+#lightbox { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.85); display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
+#lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="top"><header>
+  <span class="mark" aria-hidden="true">&para;</span>
+  <span class="title" id="title">Session</span>
+  <span class="where" id="where"></span>
+  <span class="live" id="live"><span class="dot"></span><span id="liveText">Connecting</span></span>
+</header><nav id="strip" hidden></nav></div>
+<main id="main"><div class="empty">Reading the session…</div></main>
+<button id="latest" hidden>↓ Latest</button>
+<script>
+let KEY = new URLSearchParams(location.search).get('k') || ''
+// A key in the address bar would sit in the tab list and in history. Keep it for this tab and remove it.
+if (KEY) { try { sessionStorage.setItem('reader-key', KEY) } catch (e) {} ; history.replaceState(null, '', location.pathname) }
+// Random per page load. Only cards this page builds carry it, so markup that arrives inside a reply cannot be clicked into an answer.
+const NONCE = (self.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Math.random()).slice(2) + String(Date.now())
+// Each page is one pane's reader: /p/<that pane's cmux id>. The server finds the pane's current session.
+let S = (location.pathname.match(/^\/p\/([0-9A-Fa-f-]{36})$/) || [])[1] || ''
+// /w/<n> is the Dock sidebar for cmux window n: it follows the Claude tab you are in.
+const W = (location.pathname.match(/^\/w\/(\d+|active)$/) || [])[1] || ''
+let followWs = null, prevFocused = null
+const remembered = new Map()  // workspace -> the session last shown there
+let version = '', data = null, alive = true, idle = false
+const turnHTML = new Map()   // turn id -> rendered html string (skip unchanged turns)
+const mdCache = new Map()    // text item id -> rendered html
+const opened = new Set()     // expanded tool groups
+let confirmBtn = null, confirmTimer = null
+let answerOf = () => ''
+// Stay on the newest message while you are there; fonts and screenshots load after the first draw and
+// push the page taller, so every one of those re-pins the view. Scrolling up releases it.
+let stick = true
+const toBottom = () => { if (stick) scrollTo(0, document.body.scrollHeight) }
+addEventListener('scroll', () => { stick = innerHeight + scrollY >= document.body.scrollHeight - 160; document.getElementById('latest').hidden = stick }, { passive: true })
+document.addEventListener('load', e => { if (e.target.tagName === 'IMG') toBottom() }, true)
+if (document.fonts) document.fonts.ready.then(toBottom)
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+const img = id => `/api/image?k=${encodeURIComponent(KEY)}&s=${encodeURIComponent(S)}&id=${encodeURIComponent(id)}`
+// A plain head-and-shoulders mark for your own messages, rather than anyone's initial.
+const PERSON = '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><circle cx="8" cy="5.2" r="3"/><path d="M2.4 14.6c.6-3.1 2.9-4.7 5.6-4.7s5 1.6 5.6 4.7z"/></svg>'
+
+DOMPurify.addHook('afterSanitizeAttributes', n => { if (n.tagName === 'A') { n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener noreferrer') } })
+marked.setOptions({ gfm: true, breaks: false })
+
+async function poll() {
+  try {
+    if (W) await followStep()
+    if (!S) {
+      if (!W) showEmpty('Open a reader from a Claude session in cmux: type <b>! reader</b> at its prompt.')
+      setLive(false, W ? 'No Claude here' : 'No session'); setTimeout(poll, 1000); return
+    }
+    // Drop a reply that lands after you switched sessions, so it never draws over the new one.
+    const target = S
+    const r = await fetch(`/api/feed?k=${encodeURIComponent(KEY)}&s=${encodeURIComponent(target)}&v=${encodeURIComponent(version)}`)
+    if (r.status === 403) { setLive(false, 'Not authorised: run ! reader again'); return }
+    const j = await r.json()
+    if (target !== S) { /* switched while waiting: ignore */ }
+    else if (r.status === 404) { showEmpty(esc(j.error)); setLive(false, 'Not connected') }
+    else {
+      if (!j.same) { version = j.v; alive = j.alive; idle = !!j.idle; data = j.data; data.items.length ? render() : (render(), showEmpty(alive ? 'Waiting for the first message in this session.' : 'This session has ended.')) }
+      if (data) alive ? setLive(Date.now() / 1000 - data.mtime < 8, null) : setLive(false, 'Session ended')
+    }
+  } catch (e) { document.querySelectorAll('.d-opt, .d-free input, .d-free button').forEach(b => { b.disabled = true }); setLive(false, 'Reader stopped') }
+  setTimeout(poll, 1000)
+}
+
+// The follow rule: the Claude tab you click into wins. When focus is somewhere that is not
+// Claude (a shell, a browser, this sidebar), keep the last one, so answering never switches away.
+async function followStep() {
+  const v = await (await fetch(`/api/window?k=${encodeURIComponent(KEY)}&w=${W}`)).json()
+  if (v.error) { S = ''; showEmpty(esc(v.error)); return }
+  const ids = v.sessions.map(x => x.s)
+  let next = S
+  if (v.workspace_ref !== followWs) {
+    if (followWs && S) remembered.set(followWs, S)
+    followWs = v.workspace_ref
+    next = v.focused || remembered.get(followWs) || ids[0] || ''
+  } else if (v.focused && v.focused !== prevFocused) next = v.focused
+  prevFocused = v.focused
+  if (next && !ids.includes(next)) next = ids[0] || ''
+  if (!next && ids.length === 0) next = ''
+  if (next !== S) switchTo(next)
+  drawStrip(v)
+}
+
+function switchTo(s) {
+  S = s; version = ''; data = null; turnHTML.clear(); stick = true
+  if (followWs) remembered.set(followWs, s)
+  showEmpty(s ? 'Loading\u2026' : 'No Claude session in this workspace.')
+}
+
+const cleanTitle = t => String(t || '').replace(/^[^\p{L}\p{N}]+/u, '')
+function drawStrip(v) {
+  // cmux names a workspace after its focused tab (often a URL), so the row shows a count, not that name.
+  const el = document.getElementById('strip')
+  el.hidden = v.sessions.length < 2
+  el.innerHTML = `<span class="ws">${v.sessions.length} Claude sessions</span>` + (v.sessions.length > 1 ? v.sessions.map(x =>
+    `<button class="chip${x.s === S ? ' on' : ''}" data-s="${esc(x.s)}" title="${esc(cleanTitle(x.title))}"><span class="cdot${x.working ? ' w' : ''}"></span><span class="t">${esc(cleanTitle(x.title))}</span></button>`).join('') : '')
+}
+
+function showEmpty(html) { const m = document.getElementById('main'); m.innerHTML = `<div class="empty">${html}</div>`; turnHTML.clear() }
+
+function setLive(active, msg) {
+  const el = document.getElementById('live')
+  el.classList.toggle('on', !!active)
+  document.getElementById('liveText').textContent = msg || (active ? 'Working' : 'Live')
+}
+
+// ── turns: a turn starts at each message you typed; tool calls in a row fold into one group
+function buildTurns(items) {
+  const out = []; let cur = null
+  for (const it of items) {
+    if (it.k === 'user') { cur = { id: it.id, user: it, segs: [] }; out.push(cur); continue }
+    if (!cur) { cur = { id: 'start', user: null, segs: [] }; out.push(cur) }
+    if (it.k === 'tool') {
+      const last = cur.segs[cur.segs.length - 1]
+      if (last && last.k === 'tools') last.tools.push(it)
+      else cur.segs.push({ k: 'tools', id: 'g:' + it.id, tools: [it] })
+    } else cur.segs.push(it)
+  }
+  return out
+}
+
+function render() {
+  const main = document.getElementById('main')
+  document.getElementById('title').textContent = data.title || 'Claude session'
+  // The server already shows the home folder as ~, so the account name never reaches the screen.
+  document.getElementById('where').textContent = data.cwd || ''
+  document.title = (data.title || 'Claude session') + ' · Reader'
+  const items = data.items
+  // A decision is answerable only in the newest reply, with nothing typed after it.
+  let lastUser = -1, lastText = -1
+  items.forEach((it, i) => { if (it.k === 'user') lastUser = i; if (it.k === 'text') lastText = i })
+  // A card is answerable only when Claude is waiting at its prompt (not working, not showing a permission
+  // dialog, where a typed digit would pick a menu option) and no tool call is still waiting for its result.
+  const pendingTool = lastText >= 0 && items.slice(lastText + 1).some(it => it.k === 'tool' && !it.result)
+  const openTextId = alive && idle && !pendingTool && lastText > lastUser ? items[lastText].id : null
+  // Each reply's answer is the next message you typed after it.
+  const answers = new Map(); let pending = []
+  for (const it of items) { if (it.k === 'text') pending.push(it.id); else if (it.k === 'user') { for (const id of pending) answers.set(id, it.text); pending = [] } }
+  answerOf = id => answers.get(id) || ''
+  const turns = buildTurns(items)
+  if (main.querySelector('.empty')) main.innerHTML = ''
+  const seen = new Set()
+  turns.forEach((t, i) => {
+    const isLast = i === turns.length - 1
+    const html = turnToHTML(t, openTextId, isLast)
+    seen.add(t.id)
+    let node = main.querySelector(`[data-turn="${CSS.escape(t.id)}"]`)
+    if (!node) { node = document.createElement('section'); node.className = 'turn'; node.dataset.turn = t.id; main.appendChild(node) }
+    if (turnHTML.get(t.id) !== html) { node.innerHTML = html; turnHTML.set(t.id, html); enhance(node) }
+  })
+  main.querySelectorAll('[data-turn]').forEach(n => { if (!seen.has(n.dataset.turn)) n.remove() })
+  if (stick) requestAnimationFrame(toBottom)
+}
+
+function turnToHTML(t, openTextId, isLast) {
+  let h = ''
+  if (t.user) {
+    const thumbs = (t.user.images || []).map(id => `<img src="${img(id)}" data-full="${img(id)}" alt="">`).join('')
+    h += `<div class="user"><div class="avatar" aria-hidden="true">${PERSON}</div><div class="bubble">${t.user.queued ? '<span class="queued">Sent while Claude was working</span>' : ''}${esc(thumbs ? t.user.text.replace(/\[Image #\d+\]\s*/g, '') : t.user.text)}${thumbs ? `<div class="thumbs">${thumbs}</div>` : ''}</div></div>`
+  }
+  let first = true
+  for (const s of t.segs) {
+    if (s.k === 'text') { h += replyHTML(s, first, s.id === openTextId); first = false }
+    else if (s.k === 'tools') h += toolsHTML(s)
+    else if (s.k === 'note') h += `<div class="note">${esc(s.text)}</div>`
+  }
+  if (isLast) {
+    const segs = t.segs, last = segs[segs.length - 1]
+    const busy = !last || last.k === 'text' ? false : !(last.k === 'tools' && last.tools.some(x => !x.result))
+    if (busy && Date.now() / 1000 - data.mtime < 30) h += `<div class="working"><span class="spin"></span><span class="shimmer">Claude is working</span></div>`
+  }
+  return h
+}
+
+// ── replies: markdown, with the GOAL block as a brief and DECISION blocks as cards
+function replyHTML(item, first, isOpen) {
+  const answer = isOpen ? '' : answerOf(item.id)
+  const key = item.id + (isOpen ? ':open' : '') + '|' + answer
+  let body = mdCache.get(key)
+  if (body === undefined) {
+    const parts = []; let last = 0
+    const FENCE = /```[^\n]*\n([\s\S]*?)```/g
+    const text = fenceBareDecisions(item.text)
+    let m
+    while ((m = FENCE.exec(text))) {
+      const inner = m[1]
+      let card = null
+      if (/^\s*GOAL:/m.test(inner) && /SUCCESS TEST:/.test(inner)) card = briefHTML(inner)
+      else if (/DECISION\s+\d+\s+of\s+\d+/.test(inner)) card = decisionHTML(parseDecision(inner), isOpen, answer)
+      if (card) { parts.push(md(text.slice(last, m.index))); parts.push(card); last = m.index + m[0].length }
+    }
+    parts.push(md(text.slice(last)))
+    body = parts.join('')
+    mdCache.set(key, body)
+  }
+  return `<div class="reply${first ? ' first' : ''}">${body}</div>`
+}
+
+// A reply is text from a model that may have read hostile web pages, so its HTML must not be able to draw
+// controls. Without this, a reply could contain its own <button class="d-opt" data-answer="..."> inside a
+// <div class="decision">, and two clicks would type that line into the terminal. Buttons, forms, inputs,
+// data-* attributes and every class except the language-* class that code highlighting needs are removed.
+// The real cards are built by decisionHTML() below, after sanitizing, and carry NONCE.
+// SYNC WARNING: tests/security_check.py (rule 11) matches the PURIFY settings and the NONCE guards by text.
+DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
+  if (data.attrName === 'class' && !/^language-[A-Za-z0-9_+-]+$/.test(data.attrValue)) data.keepAttr = false
+})
+const PURIFY = {
+  FORBID_TAGS: ['button', 'form', 'input', 'textarea', 'select', 'option', 'style', 'link', 'meta', 'base', 'iframe', 'object', 'embed', 'svg', 'math'],
+  FORBID_ATTR: ['id', 'name', 'style', 'form', 'formaction'],
+  ALLOW_DATA_ATTR: false,
+}
+// A reply can be hostile in size too: input is capped, and any failure falls back to escaped plain text
+// rather than freezing the page with the previous card still clickable.
+const md = s => {
+  if (!s.trim()) return ''
+  try { return DOMPurify.sanitize(marked.parse(s.slice(0, 200000)), PURIFY) } catch (e) { return `<pre>${esc(s.slice(0, 20000))}</pre>` }
+}
+
+// Some sessions write a decision block between rule lines (\u2500) with no code fence around it;
+// markdown would then draw it as loose paragraphs. Fence it so it becomes the same card.
+// The block runs from the rule above "DECISION n of m" to the next rule after its header.
+const RULE = /^\s*[\u2500\u2501]{8,}\s*$/
+function fenceBareDecisions(text) {
+  const lines = text.split('\n'), out = []
+  let inFence = false
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*```/.test(lines[i])) inFence = !inFence
+    if (!inFence && RULE.test(lines[i]) && /DECISION\s+\d+\s+of\s+\d+/.test(lines[i + 1] || '')) {
+      let k = i + 2
+      if (RULE.test(lines[k] || '')) k++
+      while (k < lines.length && !RULE.test(lines[k])) k++
+      if (k < lines.length) { out.push('```', ...lines.slice(i, k + 1), '```'); i = k; continue }
+    }
+    out.push(lines[i])
+  }
+  return out.join('\n')
+}
+
+// Strip the shared indent so a block's nested lists read as markdown lists.
+function dedent(lines) {
+  let ind = Infinity
+  for (const l of lines) if (l.trim()) ind = Math.min(ind, l.match(/^ */)[0].length)
+  return lines.map(l => l.slice(Number.isFinite(ind) ? ind : 0)).join('\n')
+}
+
+function briefHTML(inner) {
+  const rows = []; let cur = null
+  for (const raw of inner.split('\n')) {
+    const m = raw.match(/^\s*(GOAL|PAYLOAD|CONSTRAINT|SUCCESS TEST):\s*(.*)$/)
+    if (m) { cur = { k: m[1], v: m[2] }; rows.push(cur) } else if (cur && raw.trim()) cur.v += ' ' + raw.trim()
+  }
+  return `<dl class="brief">${rows.map(r => `<dt class="${r.k === 'GOAL' ? 'goal' : ''}">${esc(r.k.toLowerCase())}</dt><dd>${esc(r.v)}</dd>`).join('')}</dl>`
+}
+
+function parseDecision(body) {
+  const d = { num: 1, of: 1, title: '', question: '', options: [], rec: null, why: '', ctx: [] }
+  let sec = null, opt = null
+  for (const raw of body.split('\n')) {
+    const l = raw.trim()
+    // CONTEXT keeps its raw lines, so its bullet lists survive as lists.
+    if (sec === 'c' && !/^[─━=_-]{6,}$/.test(l)) { d.ctx.push(raw.replace(/\s+$/, '')); continue }
+    if (!l || /^[─━=_-]{6,}$/.test(l)) continue
+    let m
+    // The label separator is a colon, but Claude also writes a long or medium dash there. The
+    // escapes accept those without the characters ever appearing in this file.
+    // SYNC WARNING: docs/decision-cards.md describes this header; change both together.
+    if ((m = l.match(/^DECISION\s+(\d+)\s+of\s+(\d+)\s*[:\u2014\u2013-]?\s*(.*)$/))) { d.num = +m[1]; d.of = +m[2]; d.title = m[3]; continue }
+    if (l === 'QUESTION') { sec = 'q'; continue }
+    if (l === 'OPTIONS') { sec = 'o'; continue }
+    if ((m = l.match(/^RECOMMENDED\s*→\s*([A-Z])\b/))) { sec = 'r'; d.rec = m[1]; continue }
+    if (l === 'CONTEXT') { sec = 'c'; continue }
+    if (sec === 'q') d.question += (d.question ? ' ' : '') + l
+    else if (sec === 'o') {
+      if ((m = l.match(/^([A-Z])\)\s*(.*)$/))) { opt = { letter: m[1], label: m[2], cons: '' }; d.options.push(opt) }
+      else if (opt) {
+        if (l.startsWith('→') || opt.cons) opt.cons += (opt.cons ? ' ' : '') + l.replace(/^→\s*/, '')
+        else opt.label += ' ' + l
+      }
+    } else if (sec === 'r') d.why += (d.why ? ' ' : '') + l
+  }
+  return d
+}
+
+function decisionHTML(d, isOpen, answer) {
+  const picked = pickedLetter(d, answer)
+  const opts = d.options.map(o => {
+    const answer = `${d.num} → ${o.letter}`  // the option label is untrusted text from a reply; only the letter is typed
+    return `<button class="d-opt${o.letter === d.rec ? ' rec' : ''}${o.letter === picked ? ' chosen' : ''}" data-n="${NONCE}" data-answer="${esc(answer)}" data-letter="${esc(o.letter)}" ${isOpen ? '' : 'disabled'}>
+      <span class="d-letter">${esc(o.letter)}</span>
+      <span class="d-body">${o.letter === d.rec ? '<span class="d-chip">Recommended</span>' : ''}<span class="d-label">${esc(o.label)}</span>${o.cons ? `<span class="d-cons">${esc(o.cons)}</span>` : ''}</span>
+      <span class="d-side"><span class="d-go">Choose</span></span>
+    </button>`
+  }).join('')
+  return `<div class="decision" data-num="${d.num}">
+    <div><span class="d-kicker">Decision ${d.num} of ${d.of}</span><span class="d-title">${esc(d.title)}</span></div>
+    <div class="d-q">${esc(d.question)}</div>
+    ${opts}
+    ${d.rec ? `<div class="d-why"><b>Why ${esc(d.rec)}:</b> ${esc(d.why)}</div>` : ''}
+    ${d.ctx.some(l => l.trim()) ? `<details class="d-ctx"><summary>Context</summary><div class="d-ctxmd">${md(dedent(d.ctx))}</div></details>` : ''}
+    ${isOpen ? `<form class="d-free" data-n="${NONCE}"><input name="a" maxlength="300" placeholder="Or type your own answer" autocomplete="off"><button type="submit">Send</button></form><div class="d-status"></div>` : `<div class="d-answered">${picked ? `<span class="d-you">You chose ${esc(picked)}</span>` : 'Your next message'}${answer && answer.trim() !== picked ? ': \u201C' + esc(answer.length > 140 ? answer.slice(0, 139) + '\u2026' : answer) + '\u201D' : ''}</div>`}
+  </div>`
+}
+
+// The letter you picked, read from your next message: "A", "1)A 2)B", "1 \u2192 A (...)".
+function pickedLetter(d, answer) {
+  if (!answer) return null
+  const own = answer.match(new RegExp('(?:^|\\s)' + d.num + '\\s*[)\\u2192:.]?\\s*([A-Z])\\b'))
+  if (own) return own[1]
+  const lone = d.of === 1 && answer.trim().match(/^([A-Z])(?:\b|$)/)
+  return lone ? lone[1] : null
+}
+
+// ── tool activity
+const ICON = { command: '&gt;_', read: '○', edit: '✎', web: '◎', agent: '◇', other: '•' }
+function toolsHTML(g) {
+  const c = { command: 0, read: 0, edit: 0, web: 0, agent: 0, other: 0 }; let running = 0, errors = 0
+  for (const t of g.tools) { c[t.cat]++; if (!t.result) running++; else if (t.result.error) errors++ }
+  const n = (k, one, many) => c[k] ? (c[k] === 1 ? one : many.replace('#', c[k])) : null
+  const parts = [n('command', 'ran a command', 'ran # commands'), n('read', 'read a file', 'read # files'), n('edit', 'edited a file', 'edited # files'),
+    n('web', 'searched the web', 'used the web # times'), n('agent', 'ran an agent', 'ran # agents'), n('other', 'used a tool', 'used # tools')].filter(Boolean)
+  let label = parts.join(', '); label = label.charAt(0).toUpperCase() + label.slice(1)
+  const open = opened.has(g.id)
+  const cards = open ? g.tools.map(cardHTML).join('') : ''
+  return `<div class="tools${open ? ' open' : ''}" data-group="${esc(g.id)}">
+    <span class="t-row">${running ? '<span class="spin"></span>' : '<span class="chev">▶</span>'}<span>${esc(label)}</span>${errors ? `<span class="t-err">· ${errors} failed</span>` : ''}</span>
+    <div class="t-list">${cards}</div></div>`
+}
+
+function cardHTML(t) {
+  const r = t.result
+  let h = `<div class="tcard ${t.cat}"><div class="tc-head"><span class="tc-icon">${ICON[t.cat] || ICON.other}</span><span>${esc(t.summary)}</span>`
+  if (r && r.diff) h += `<span class="tc-stat"><span class="a">+${r.diff.add}</span> <span class="d">−${r.diff.del}</span></span>`
+  if (!r) h += '<span class="spin" style="margin-left:6px"></span>'
+  h += '</div>'
+  if (t.detail && t.cat === 'command') h += `<div class="tc-detail">${esc(t.detail)}</div>`
+  if (r && r.diff) h += `<div class="diff">${r.diff.lines.map(l => `<div class="${l[0] === '+' ? 'a' : l[0] === '-' ? 'd' : ''}">${esc(l)}</div>`).join('')}</div>`
+  else if (r && r.text && r.text.trim()) h += `<pre class="tc-out${r.error ? ' err' : ''}">${esc(r.text)}${r.more ? `\n… ${r.more} more characters` : ''}</pre>`
+  if (r && r.images && r.images.length) h += r.images.map(id => `<div class="tc-img"><img src="${img(id)}" data-full="${img(id)}" alt=""></div>`).join('')
+  return h + '</div>'
+}
+
+// ── behaviour on freshly drawn nodes
+function enhance(node) {
+  node.querySelectorAll('.reply pre code').forEach(el => {
+    try { hljs.highlightElement(el) } catch (e) {}
+    const pre = el.parentElement
+    if (pre.querySelector('.copy')) return
+    const b = document.createElement('button'); b.className = 'copy'; b.textContent = 'Copy'
+    b.onclick = () => navigator.clipboard.writeText(el.innerText).then(() => { b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1200) })
+    pre.appendChild(b)
+  })
+}
+
+document.addEventListener('click', e => {
+  const chip = e.target.closest('.chip')
+  if (chip) { if (chip.dataset.s !== S) switchTo(chip.dataset.s); return }
+  if (e.target.id === 'latest') { stick = true; toBottom(); e.target.hidden = true; return }
+  const row = e.target.closest('.t-row')
+  if (row) {
+    const g = row.parentElement.dataset.group
+    opened.has(g) ? opened.delete(g) : opened.add(g)
+    turnHTML.clear(); render(); return
+  }
+  const im = e.target.closest('img[data-full]')
+  if (im) { openFull(im.dataset.full); return }
+  const opt = e.target.closest('.d-opt')
+  if (opt && !opt.disabled && opt.dataset.n === NONCE) {
+    if (confirmBtn !== opt) {
+      if (confirmBtn) resetConfirm()
+      confirmBtn = opt; opt.classList.add('confirm')
+      opt.querySelector('.d-go').textContent = `Click again to send ${opt.dataset.letter}`
+      confirmTimer = setTimeout(resetConfirm, 4000); return
+    }
+    resetConfirm(); sendAnswer(opt.closest('.decision'), opt.dataset.answer, opt)
+  }
+})
+
+document.addEventListener('submit', e => {
+  const f = e.target.closest('.d-free'); if (!f || f.dataset.n !== NONCE) return
+  e.preventDefault()
+  const v = f.a.value.trim(); if (v) sendAnswer(f.closest('.decision'), v, null)
+})
+
+// A screenshot opens inside the page, not in a new tab: a new tab's address would carry the key.
+function openFull(src) {
+  const o = document.createElement('div'); o.id = 'lightbox'
+  const i = document.createElement('img'); i.src = src; i.alt = ''
+  o.appendChild(i); o.onclick = () => o.remove(); document.body.appendChild(o)
+}
+addEventListener('keydown', e => { if (e.key === 'Escape') { const o = document.getElementById('lightbox'); if (o) o.remove() } })
+
+function resetConfirm() {
+  clearTimeout(confirmTimer)
+  if (confirmBtn) { confirmBtn.classList.remove('confirm'); const g = confirmBtn.querySelector('.d-go'); if (g) g.textContent = 'Choose' }
+  confirmBtn = null
+}
+
+async function sendAnswer(card, text, btn) {
+  const st = card.querySelector('.d-status')
+  st.className = 'd-status'; st.textContent = 'Sending to your terminal…'
+  try {
+    const r = await fetch('/api/answer', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Reader-Key': KEY }, body: JSON.stringify({ s: S, text }) })
+    const j = await r.json().catch(() => ({}))
+    if (r.ok && j.ok) { st.className = 'd-status ok'; st.textContent = `Sent: “${text}”`; if (btn) btn.classList.add('chosen') }
+    else { st.className = 'd-status bad'; st.textContent = j.message || j.error || `Not sent (${r.status})` }
+  } catch (e) { st.className = 'd-status bad'; st.textContent = 'Not sent: the reader is not running' }
+}
+
+// The launcher URL carries a one-time ticket (?t=), not the key: the key would be visible in the command
+// line that opened this page. The ticket is swapped for the key once, kept for this tab only, and removed
+// from the address bar.
+async function bootKey() {
+  const t = new URLSearchParams(location.search).get('t')
+  if (t) {
+    try {
+      const j = await (await fetch('/api/redeem?t=' + encodeURIComponent(t))).json()
+      if (j.k) { KEY = j.k; try { sessionStorage.setItem('reader-key', KEY) } catch (e) {} }
+    } catch (e) {}
+    history.replaceState(null, '', location.pathname)
+  }
+  if (!KEY) { try { KEY = sessionStorage.getItem('reader-key') || '' } catch (e) {} }
+}
+bootKey().then(poll)
+</script>
+</body>
+</html>

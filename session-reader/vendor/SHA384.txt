@@ -1,0 +1,11 @@
+# SHA-384 of every vendored file, as used in the page's integrity attributes (SRI).
+# Recompute with: openssl dgst -sha384 -binary <file> | openssl base64 -A
+marked.min.js  sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi  35479 bytes
+purify.min.js  sha384-P0JNneQf81HOl9VwNXK76cQ9VMD6Nfsnepxb0cCOg8+UzEdzgPHAPV4wVQrvYQSx  29828 bytes
+highlight.min.js  sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp  121727 bytes
+github-dark.min.css  sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH  1315 bytes
+fonts/inter_variable.woff2  sha384-NDj3qtsUEjin1XBDZ9zwBRsJjDf51qDfUnZZfiNICq+3AWnh8dTXCRjW9qQHFnEK  352240 bytes
+fonts/lora_variable.woff2  sha384-C4yCT08hUS8M++AVzDMqKPmeVhf6n5JLxjFJMJo0zPaffTQS7Hq/TdKwi7mXJvHJ  84272 bytes
+fonts/lora_italic_variable.woff2  sha384-LLOOBojXOay9pH1Q2ZCIUXFZnmh1yUIR1tTxbF6wFcJHUGgDbFd/O8nhGLPpaXMQ  92248 bytes
+fonts/jetbrains_mono_regular.woff2  sha384-Q7P8LTSqU5heIrhzzG3SuJDn9fQ9qb9cjvjrvyYUe5xpePOJv4LcnBAXf3pRFM2J  92164 bytes
+fonts/jetbrains_mono_medium.woff2  sha384-iChjCIHcdCTbnaX33ZvjJqj3FiUN0bRCoAtRmCnimDfr24uVOfBlW60b9omMZ58y  93824 bytes

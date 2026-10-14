@@ -163,11 +163,11 @@ Claude Code caches each account's usage in the settings folder's `.claude.json`,
 
 ```json
 "cachedUsageUtilization": {
-  "fetchedAtMs": 1785880694529,
+  "fetchedAtMs": 1700000000000,
   "accountUuid": "...",
   "utilization": {
-    "five_hour": { "utilization": 17, "resets_at": "2026-08-05T02:40:00Z" },
-    "seven_day": { "utilization": 41, "resets_at": "2026-08-06T01:00:00Z" },
+    "five_hour": { "utilization": 17, "resets_at": "2023-11-15T03:00:00Z" },
+    "seven_day": { "utilization": 41, "resets_at": "2023-11-18T00:00:00Z" },
     "limits": [
       { "kind": "session",       "percent": 17, "is_active": false },
       { "kind": "weekly_all",    "percent": 41, "is_active": true },

@@ -1,0 +1,277 @@
+#!/usr/bin/python3 -I
+"""
+reader: open a live, readable view of a Claude Code session in cmux.
+
+Run it from a Claude Code prompt inside cmux:
+
+    ! reader         the sidebar: a reader in this window's right-hand Dock that
+                     follows whichever Claude tab you are in
+    ! reader here    a split beside this one session, which follows it through /clear
+    reader stop      stop this install's server (used by uninstall.sh)
+
+What `reader here` does, in order:
+1. Registers this pane (its cmux names and its Claude process) in
+   <READER_HOME>/panes/, so the reader always shows THIS pane's session,
+   including after a /clear.
+2. Makes sure the one reader server is running with current code and can reach
+   cmux. It must be started from inside cmux: cmux refuses its socket to
+   processes it did not start unless they carry the pane's CMUX_SOCKET_CAPABILITY,
+   so it is never started at login.
+3. Opens the page in a browser split to the right, or refreshes the reader tab
+   already in this workspace instead of stacking a second one.
+
+The shebang runs macOS's own /usr/bin/python3 (3.9 or newer once Apple's
+Command Line Tools are installed) in isolated mode (-I), so no PYTHON*
+variable, user site-packages or file in the current folder can change what runs.
+"""
+import importlib.util
+import hashlib
+import hmac
+import json
+import os
+import re
+import secrets
+import signal
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+if sys.version_info < (3, 9):
+    sys.exit("reader: needs Python 3.9 or newer (this is %d.%d)." % sys.version_info[:2])
+
+# realpath, because ~/.local/bin/reader is a link to this file.
+HERE = Path(os.path.realpath(__file__)).parent
+SERVER = HERE / "reader.py"
+
+
+def load_server_module():
+    """reader.py owns the settings (READER_PORT, READER_HOME, the cmux path), so the
+    launcher and the server can never disagree about them.
+    SYNC WARNING: names read below (PORT, STATE, PANES, KEYFILE, PIDFILE, LOG, CMUX,
+    CODE_MTIME) are defined in reader.py; rename them in both places together."""
+    sys.dont_write_bytecode = True  # keep __pycache__ out of the install folder
+    spec = importlib.util.spec_from_file_location("reader_server", str(SERVER))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+srv = load_server_module()
+PORT, STATE, PANES, KEYFILE, PIDFILE, LOG, CMUX = srv.PORT, srv.STATE, srv.PANES, srv.KEYFILE, srv.PIDFILE, srv.LOG, srv.CMUX
+ENV = dict(os.environ, CMUX_QUIET="1")
+
+
+def die(msg):
+    print("reader: " + msg)
+    sys.exit(1)
+
+
+def cmux(*args):
+    if not os.path.isfile(CMUX):
+        die("cmux was not found. Install cmux, or set CMUX_BUNDLED_CLI_PATH to its command-line tool.")
+    return subprocess.run([CMUX, *args], capture_output=True, text=True, env=ENV, timeout=15)
+
+
+# Loopback calls must never go through a proxy named in the environment.
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def health():
+    """/health, with "_ours" set only if the answering process proved it knows this install's key (an
+    HMAC of a fresh nonce). A program that merely sits on the port, or copies a pid, cannot."""
+    nonce = secrets.token_urlsafe(12)
+    try:
+        with _OPENER.open("http://127.0.0.1:%d/health?n=%s" % (PORT, nonce), timeout=2) as r:
+            h = json.load(r)
+    except Exception:
+        return None
+    if not isinstance(h, dict):
+        return None
+    try:
+        key = KEYFILE.read_text().strip()
+    except OSError:
+        key = ""
+    want = hmac.new(key.encode(), nonce.encode(), hashlib.sha256).hexdigest() if key else None
+    h["_ours"] = bool(want) and isinstance(h.get("proof"), str) and hmac.compare_digest(h["proof"], want)
+    return h
+
+
+def ticket():
+    """A one-time, 20 second launch ticket, written as a private file the server will accept. The page
+    URL carries this instead of the key, because the URL is handed to cmux on a command line that other
+    local users can read with ps. The key itself is never sent to the server, so a program that merely
+    sits on the port cannot collect it."""
+    import secrets
+    d = STATE / "tickets"
+    d.mkdir(parents=True, exist_ok=True)
+    os.chmod(str(d), 0o700)
+    now = time.time()
+    for old in d.iterdir():  # sweep expired tickets
+        try:
+            if now - old.lstat().st_mtime > 60:
+                old.unlink()
+        except OSError:
+            pass
+    t = secrets.token_urlsafe(24)
+    fd = os.open(str(d / t), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
+    return t
+
+
+def port_taken():
+    s = socket.socket()
+    try:
+        return s.connect_ex(("127.0.0.1", PORT)) == 0
+    finally:
+        s.close()
+
+
+def our_server(h):
+    """True only if the answering process proved it holds this install's key (see health()). A pid
+    alone is not trusted: `reader` must never stop, or hand a URL to, another program or another copy
+    of reader with a different READER_HOME that happens to use the same port."""
+    return bool(h) and h.get("_ours") is True
+
+
+def stop(h):
+    pid = int(h["pid"])
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+    for _ in range(30):
+        if not port_taken():
+            break
+        time.sleep(0.1)
+    return pid
+
+
+def ensure_server():
+    h = health()
+    # our_server() also on this fast path: a program that merely answers /health with the right code
+    # must not be handed the launcher URL.
+    if h and h.get("code") == srv.CODE_MTIME and h.get("cmux") and our_server(h):
+        return
+    if h:
+        # Older code, or it lost cmux (cmux restarted): replace it, if it is ours.
+        if not our_server(h):
+            die("port %d is used by another program or another reader install; nothing was started. Set READER_PORT to use a different port." % PORT)
+        stop(h)
+    if port_taken():
+        die("port %d is used by another program; nothing was started. Set READER_PORT to use a different port." % PORT)
+    STATE.mkdir(parents=True, exist_ok=True)
+    with os.fdopen(os.open(str(LOG), os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600), "ab") as log:
+        # A new session (setsid) so closing this pane does not stop it; it keeps
+        # this pane's cmux key, and the READER_* settings, from the inherited environment.
+        subprocess.Popen([sys.executable, "-I", str(SERVER), "--serve"], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                         start_new_session=True, close_fds=True, env=os.environ)
+    for _ in range(40):
+        time.sleep(0.15)
+        h = health()
+        if h and h.get("code") == srv.CODE_MTIME and our_server(h):
+            return
+    die("the reader server did not start; see %s" % LOG)
+
+
+def caller():
+    try:
+        return json.loads(cmux("identify", "--json").stdout or "{}").get("caller") or {}
+    except ValueError:
+        return {}
+
+
+def open_sidebar():
+    """The Dock sidebar for this window. It needs no registration: the server reads
+    the window's tabs from cmux and finds the Claude session behind each one."""
+    wref = caller().get("window_ref") or ""
+    if not re.fullmatch(r"window:\d+", wref):
+        die("run this inside a cmux pane, from the Claude prompt: ! reader")
+    ensure_server()
+    # "active": the Dock moves between windows, so the page follows the focused one.
+    # The ticket is made right before each use: it lives 20 seconds and cmux can be slow.
+    mk = lambda: "http://127.0.0.1:%d/w/active?t=%s" % (PORT, ticket())
+    for line in cmux("tree", "--window", wref).stdout.splitlines():
+        if "[browser]" in line and ("127.0.0.1:%d/w/" % PORT) in line:
+            tab = re.search(r"surface:\d+", line)
+            if tab and cmux("browser", "--surface", tab.group(0), "navigate", mk()).returncode == 0:
+                print("reader: refreshed the sidebar in this window's Dock.")
+                return
+    # Stacked under whatever the Dock already holds: the Dock is narrow, so a
+    # side-by-side split left the reader about 140 px wide.
+    p = cmux("new-pane", "--type", "browser", "--placement", "dock", "--direction", "down", "--window", wref, "--url", mk(), "--focus", "false")
+    if p.returncode != 0:
+        die("cmux could not open the Dock pane (is Settings, Beta Features, Dock switched on?): " + (p.stderr or p.stdout).strip()[:200])
+    print("reader: opened in this window's Dock. It follows the Claude tab you are in.")
+
+
+def open_here():
+    surface = (os.environ.get("CMUX_SURFACE_ID") or "").upper()
+    workspace = (os.environ.get("CMUX_WORKSPACE_ID") or "").upper()
+    pid = os.environ.get("CMUX_CLAUDE_PID") or ""
+    if not surface or not workspace:
+        die("run this inside a cmux pane, from the Claude prompt: ! reader here")
+    if not srv.UUID_RE.fullmatch(surface):
+        die("cmux gave this pane an id this version does not understand; nothing was changed.")
+    cfg = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude")).expanduser()
+    if not pid.isdigit() or not (cfg / "sessions" / ("%s.json" % pid)).exists():
+        die("no Claude session found in this pane. Run it from the Claude prompt: ! reader here")
+    me = caller()
+    sref, wref = me.get("surface_ref"), me.get("workspace_ref")
+    if not (sref and wref and re.fullmatch(r"surface:\d+", sref) and re.fullmatch(r"workspace:\d+", wref)):
+        die("cmux did not identify this pane; nothing was changed.")
+
+    PANES.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(str(PANES), 0o700)
+    except OSError:
+        pass
+    reg = {"surface": surface, "workspace": workspace, "surface_ref": sref, "workspace_ref": wref,
+           "claude_pid": int(pid), "config_dir": str(cfg), "cwd": os.getcwd(), "registered_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    tmp = PANES / (surface + ".json.tmp")
+    tmp.write_text(json.dumps(reg, indent=1))
+    tmp.replace(PANES / (surface + ".json"))
+
+    ensure_server()
+    mk = lambda: "http://127.0.0.1:%d/p/%s?t=%s" % (PORT, surface, ticket())
+
+    # Reuse this pane's reader tab rather than stacking a second split. A reader
+    # tab that belongs to another pane is left alone.
+    for line in cmux("tree", "--workspace", wref).stdout.splitlines():
+        if "[browser]" not in line or ("127.0.0.1:%d/p/%s" % (PORT, surface)) not in line:
+            continue
+        tab = re.search(r"surface:\d+", line)
+        if tab and cmux("browser", "--surface", tab.group(0), "navigate", mk()).returncode == 0:
+            print("reader: refreshed the reader beside this session.")
+            return
+    p = cmux("new-pane", "--type", "browser", "--direction", "right", "--workspace", wref, "--url", mk(), "--focus", "false")
+    if p.returncode != 0:
+        die("cmux could not open the reader pane: " + (p.stderr or p.stdout).strip()[:200])
+    print("reader: opened beside this session.")
+
+
+def stop_command():
+    h = health()
+    if not h:
+        print("reader: no reader server is running on port %d." % PORT)
+        return
+    if not our_server(h):
+        die("the server on port %d was not started by this install (its pid is not in %s); it was left running." % (PORT, PIDFILE))
+    print("reader: stopped the server (pid %d)." % stop(h))
+
+
+def main():
+    args = sys.argv[1:]
+    if args == []:
+        return open_sidebar()
+    if args == ["here"]:
+        return open_here()
+    if args == ["stop"]:
+        return stop_command()
+    die("usage: ! reader   (sidebar)   or   ! reader here   (split beside this session)   or   reader stop")
+
+
+if __name__ == "__main__":
+    main()

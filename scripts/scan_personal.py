@@ -52,6 +52,9 @@ GENERIC = [
     ("phone", re.compile(r"\+1[0-9]{10}\b|\([0-9]{3}\) ?[0-9]{3}-[0-9]{4}|\b[0-9]{3}-[0-9]{3}-[0-9]{4}\b")),
 ]
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)")
+# The exact shape of a Subresource Integrity value: the algorithm, then base64 of the right length.
+# A longer or shorter string that merely starts with "sha384-" does not match and is still scanned.
+SRI = re.compile(r"sha256-[A-Za-z0-9+/]{43}=|sha384-[A-Za-z0-9+/]{64}|sha512-[A-Za-z0-9+/]{86}==")
 QUOTED = re.compile(r"""['"]([A-Za-z0-9+/_=-]{40,})['"]""")
 
 
@@ -103,6 +106,10 @@ def scan_text(label, text, private):
                 hits.append((label, n, "email", line))
         for m in QUOTED.finditer(line):
             s = m.group(1)
+            # A Subresource Integrity value (integrity="sha384-...") is a public fingerprint of a
+            # file, printed in the page on purpose so browsers can check it. It is not a secret.
+            if SRI.fullmatch(s):
+                continue
             # An ordered alphabet (a character whitelist) is long but not random.
             if entropy(s) > 4.2 and "abcdefghij" not in s and "ABCDEFGHIJ" not in s:
                 hits.append((label, n, "random-string", line))

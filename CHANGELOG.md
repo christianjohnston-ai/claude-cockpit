@@ -1,5 +1,21 @@
 # Changelog
 
+## [2026-10-14] - Type: Config
+- Change: Added `session-reader/`, a separate tool that shows a Claude Code session running in cmux as a
+  readable web page and lets its decision cards type an answer back into the terminal. Local server on
+  127.0.0.1, Python standard library only, no telemetry; libraries and fonts are bundled with their
+  licences (`THIRD_PARTY_NOTICES.md`). It ships its own installer, uninstaller, a 132-check security
+  script (`session-reader/tests/security_check.py`) and `docs/decision-cards.md`. The root README gained a
+  pointer section. The tool shares no files with the cockpit tools; its MIT licence is this repository's
+  root LICENSE. The leak scanner (`scripts/scan_personal.py`) now skips Subresource Integrity values
+  (an exact `sha256-`, `sha384-` or `sha512-` value of the right length), which are public file
+  fingerprints the reader's page must print. One example payload in `docs/how_it_works.md` now uses
+  invented values.
+- Files: session-reader/ (new folder), scripts/scan_personal.py, docs/how_it_works.md, README.md, CHANGELOG.md
+- State impact: None
+- Field mutations: None
+- Performance: Not measured
+
 ## [2026-10-10] - Type: Config
 - Change: The README ends with a credit line naming the author and linking the GitHub profile.
 - Files: README.md, CHANGELOG.md
