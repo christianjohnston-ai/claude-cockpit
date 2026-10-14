@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-10-14] - Type: UI
+- Change: The session-reader README now opens with a demo GIF (`session-reader/docs/demo.gif`, 1360x760, 26.6 s,
+  0.54 MB) in place of its TODO line. It was recorded from a real throwaway Claude Code session in an empty temp
+  folder: a tool group folds into one line and opens with a click, then a decision card's answer is typed into the
+  terminal and the session carries on. Every frame was checked for personal details before it was added.
+- Files: session-reader/docs/demo.gif (new), session-reader/README.md, CHANGELOG.md
+- State impact: None
+- Field mutations: None
+- Performance: Not measured
+
 ## [2026-10-14] - Type: Config
 - Change: Added `session-reader/`, a separate tool that shows a Claude Code session running in cmux as a
   readable web page and lets its decision cards type an answer back into the terminal. Local server on

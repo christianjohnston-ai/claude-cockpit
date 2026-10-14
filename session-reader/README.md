@@ -5,8 +5,7 @@ reading font, real headings and tables, and tool calls folded into one tidy line
 It runs in a browser pane inside cmux, right beside the session, and its decision cards can
 type your answer back into the terminal.
 
-<!-- TODO: demo GIF goes here. Record it from a throwaway session that shows no private work. -->
-> **TODO:** demo GIF.
+![Session Reader beside a Claude Code session: a folded tool group opens with one click, then a decision card's answer is typed into the terminal and the session carries on](docs/demo.gif)
 
 Not affiliated with or endorsed by Anthropic or Manaflow. Claude and Claude Code are products of
 Anthropic; cmux is a product of Manaflow. This is an independent, free tool.
