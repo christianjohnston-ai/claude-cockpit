@@ -20,11 +20,15 @@ import sys as _sys; _sys.dont_write_bytecode = True  # gotcha #13
 from concurrent.futures import ThreadPoolExecutor
 
 BASE = os.path.expanduser("~/.claude-profiles")
+if sys.platform == "win32":
+    BASE = os.path.normpath(BASE)
 # SYNC WARNING: must stay the installer-maintained symlink, never a version path.
 # `claude` on PATH can resolve to a terminal app's shim or to a stale install.
 # COCKPIT_CLAUDE_BIN overrides it for installs that live elsewhere; the full list of
 # places this lookup is repeated is in claude-switch.py next to CLAUDE_BIN.
-CLAUDE = os.environ.get("COCKPIT_CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude")
+CLAUDE = os.environ.get("COCKPIT_CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude.exe" if sys.platform == "win32" else "~/.local/bin/claude")
+if sys.platform == "win32":
+    CLAUDE = os.path.normpath(CLAUDE)
 
 C = {"red": "\033[31m", "yel": "\033[33m", "grn": "\033[32m",
      "dim": "\033[2m", "bold": "\033[1m", "off": "\033[0m"}
@@ -56,7 +60,7 @@ def when(iso):
     hrs = (t - datetime.datetime.now().astimezone()).total_seconds() / 3600
     if hrs < 0:
         return "due"
-    stamp = t.strftime("%-I:%M%p").lower() if hrs < 24 else t.strftime("%a %-I%p").lower()
+    stamp = t.strftime("%#I:%M%p" if sys.platform == "win32" else "%-I:%M%p").lower() if hrs < 24 else t.strftime("%a %#I%p" if sys.platform == "win32" else "%a %-I%p").lower()
     return f"{stamp} ({hrs:.0f}h)"
 
 
@@ -103,6 +107,10 @@ def refresh(name):
     Sets the var explicitly rather than inheriting: this tool may be run from a
     shell that already exports CLAUDE_CONFIG_DIR for the active profile, and
     inheriting it would probe one account N times instead of N accounts once."""
+    native_error = ckpit.credential_status(name)
+    if native_error:
+        REFRESH_STATUS[name] = native_error
+        return
     env = dict(os.environ)
     env["CLAUDE_CONFIG_DIR"] = os.path.join(BASE, name)
     try:
@@ -143,7 +151,8 @@ def main():
     fast = "--fast" in sys.argv
     names = profiles()
     if not names:
-        print("No profiles. Create one: bash ~/.claude-profiles/new-profile.sh <name>")
+        print("No profiles. Create one: " + ("claude-new-profile <name>" if sys.platform == "win32" else
+                                             "bash ~/.claude-profiles/new-profile.sh <name>"))
         return
     # force=True picks up a switch made since this process started. Still needed
     # for the active-row MARKER even though refresh() no longer varies by it.
@@ -181,12 +190,16 @@ def main():
             return f"{colour(v)}{v:>3.0f}%{C['off']}{dot}"
         fp, sp, pp = cell(f, "session"), cell(s, "weekly_all"), cell(pv, "weekly_scoped")
         stale = ""
-        st = REFRESH_STATUS.get(r["name"])
+        st = r.get("credential_error") or REFRESH_STATUS.get(r["name"])
         # Never advise /login without checking. (Historical note: this comment
         # once claimed a second login kills the first grant — DISPROVEN
         # 2026-08-17, two independent grants per account coexist. The rule
         # survives because the advice would still be aimed at the wrong lane.)
-        if st == "timeout":
+        if st == "unreadable":
+            stale = "  Credential store unreadable — usage is unverified; inspect permissions/data"
+        elif st == "missing":
+            stale = f"  No stored profile login — claude-login {r['name']}"
+        elif st == "timeout":
             stale = f"  {C['yel']}⚠ TIMED OUT (>90s) — numbers are old; do NOT /login{C['off']}"
         elif st == "failed":
             # The is_active_acct branch here is gone (2026-08-17). It existed
@@ -210,7 +223,7 @@ def main():
         print(f"{mark}{r['name']:<10} {r['email']:<38} {bar(f)} {fp}  {bar(s)} {sp}  "
               f"{bar(pv)} {pp}  {when(r['five_at']):<16} {when(r['seven_at'])}{stale}")
 
-    live = [r for r in rows if r["five"] is not None]
+    live = [r for r in rows if r["five"] is not None and not r.get("credential_error")]
     print()
     if not live:
         print(f"{C['dim']}No usage data yet. Run without --fast.{C['off']}")

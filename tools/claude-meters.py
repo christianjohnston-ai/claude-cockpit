@@ -53,6 +53,8 @@ import json, os, sys, time, datetime, importlib.util, glob
 sys.dont_write_bytecode = True   # gotcha #13
 
 BASE = os.path.expanduser("~/.claude-profiles")
+if sys.platform == "win32":
+    BASE = os.path.normpath(BASE)
 METERS = os.path.join(BASE, "meters.jsonl")
 TOKENS = os.path.join(BASE, "token_hours.json")
 FORECAST = os.path.join(BASE, "forecast.json")
@@ -541,7 +543,7 @@ def fmt_when(h, at=None):
     if h is None:
         return "never (next 7 days)"
     t = datetime.datetime.fromtimestamp((at or now_ts()) + h * 3600)
-    return f"{t.strftime('%a %-I:%M%p').replace('AM', 'am').replace('PM', 'pm')} (in {h:.0f}h)"
+    return f"{t.strftime('%a %#I:%M%p' if sys.platform == 'win32' else '%a %-I:%M%p').replace('AM', 'am').replace('PM', 'pm')} (in {h:.0f}h)"
 
 
 def main():

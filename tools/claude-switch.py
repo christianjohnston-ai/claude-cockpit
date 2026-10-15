@@ -58,14 +58,18 @@ SYNC WARNING: claude-cockpit.py imports this module (fleet_email, fleet_anchor,
   asserting it contains no keychain write or delete — the only credential
   writer allowed here is the official `claude auth login` subprocess.
 """
-import json, os, subprocess, sys, hashlib, datetime
+import json, os, subprocess, sys, hashlib, datetime, ntpath
 # No bytecode cache: importing this module used to create
 # ~/.claude-profiles/__pycache__/, and anything that points claude at a dir
 # lacking .claude.json INITIALISES a fresh config there — which once turned
 # __pycache__ into a fake sixth profile (gotcha #13, second bite 2026-08-17).
 sys.dont_write_bytecode = True
 
+IS_WINDOWS = sys.platform == "win32"
+
 BASE = os.path.expanduser("~/.claude-profiles")
+if sys.platform == "win32":
+    BASE = os.path.normpath(BASE)
 UNDO = os.path.join(BASE, ".last-switch.json")
 # Claude's own name for the shared keychain slot. It is also the PREFIX of every
 # per-config-dir slot (slot_for), so it must never change meaning.
@@ -130,13 +134,18 @@ def fleet_env(env):
 # called here yet). test_fleet_dir.py F2/F3 pin that the two agree.
 FLEET_SLOT = (f"{SLOT_PREFIX}-{hashlib.sha256(FLEET_DIR.encode()).hexdigest()[:8]}"
               if FLEET_DIR else SLOT_PREFIX)
+if IS_WINDOWS:
+    FLEET_SLOT = os.path.normpath(os.path.join(
+        FLEET_DIR or os.path.expanduser("~/.claude"), ".credentials.json"))
 DEFAULT_SLOT = FLEET_SLOT      # legacy name: every existing caller means "the fleet slot"
 # Never bare `claude`: a PATH lookup can resolve to a terminal app's shim or to a stale
 # install that predates `claude auth status` entirely.
 # COCKPIT_CLAUDE_BIN is the override for installs that live somewhere else (npm,
 # Homebrew). SYNC WARNING: the same two-step lookup is repeated in claude-cockpit.py,
 # claude-usage.py, claude-ping.py (CLAUDE), claude-as.sh (CLAUDE_AS_BIN) and verify.sh.
-CLAUDE_BIN = os.environ.get("COCKPIT_CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude")
+CLAUDE_BIN = os.environ.get("COCKPIT_CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude.exe" if IS_WINDOWS else "~/.local/bin/claude")
+if sys.platform == "win32":
+    CLAUDE_BIN = os.path.normpath(CLAUDE_BIN)
 
 
 def require_claude():
@@ -147,8 +156,14 @@ def require_claude():
     failing to refresh, and neither tells a new user about the one-line fix.
     Called from each tool's entry point, never at import, so the tests and the
     modules that load this file stay importable on a machine without Claude Code."""
-    if os.path.isfile(CLAUDE_BIN) and os.access(CLAUDE_BIN, os.X_OK):
+    if (os.path.isabs(CLAUDE_BIN) and os.path.isfile(CLAUDE_BIN)
+            and (not IS_WINDOWS or CLAUDE_BIN.lower().endswith(".exe"))
+            and os.access(CLAUDE_BIN, os.X_OK)):
         return
+    if IS_WINDOWS:
+        sys.stderr.write("claude-cockpit: set $env:COCKPIT_CLAUDE_BIN to the absolute path "
+                         "of the native claude.exe (not an npm .cmd shim).\n")
+        sys.exit(2)
     sys.stderr.write(
         "claude-cockpit: Claude Code was not found at %s\n"
         "  If it is installed somewhere else, add this line to ~/.zshrc and open a new terminal:\n"
@@ -207,7 +222,7 @@ def chrome_profile_for_email(email):
     profiles churn it, so a mid-write read is expected, not exceptional; a
     cosmetic feature must never take the switch down with it.
     """
-    if not email:
+    if IS_WINDOWS or not email:
         return None                      # "" would otherwise match every
                                          # blank-user_name profile (a typical
                                          # machine has several), and the 2+ rule
@@ -239,12 +254,52 @@ def chrome_label(dirname):
 def slot_for(path):
     """Claude Code derives a config dir's slot as sha256(dir)[:8]. Recomputed,
     never stored, so it cannot drift if a profile is renamed."""
+    if IS_WINDOWS:
+        return os.path.normpath(os.path.join(path, ".credentials.json"))
     return f"{SLOT_PREFIX}-{hashlib.sha256(path.encode()).hexdigest()[:8]}"
+
+
+class CredentialReadError(Exception):
+    """An unreadable store is never an empty/signed-out store."""
+
+
+def read_windows_credential(slot):
+    """Read Claude's native file, never write/copy tokens or inspect Credential Manager.
+
+    Source: code.claude.com/docs/en/authentication#credential-management.
+    A spare is a macOS-only concept. Unknown slots are refused, not guessed.
+    """
+    if slot.startswith("claude-cockpit-spare-"):
+        return None
+    allowed = {FLEET_SLOT} | {slot_for(os.path.join(BASE, n)) for n in profiles()}
+    # expanduser on Windows can preserve '/' while pathlib/CLI callers use '\\'.
+    # Match native separator/case semantics, but always open the allowlisted path,
+    # never the caller's spelling (or an arbitrary path made absolute for it).
+    by_key = {ntpath.normcase(ntpath.normpath(path)): path for path in allowed}
+    trusted_path = by_key.get(ntpath.normcase(ntpath.normpath(slot)))
+    if trusted_path is None:
+        raise CredentialReadError("Unrecognized credential store; refusing to guess.")
+    try:
+        with open(trusted_path, encoding="utf-8-sig") as f:
+            value = json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        raise CredentialReadError("Credential store is unreadable; no login was changed.") from None
+    if not isinstance(value, dict):
+        raise CredentialReadError("Credential store is malformed; no login was changed.")
+    oauth = value.get("claudeAiOauth")
+    if oauth is not None and not isinstance(oauth, dict):
+        raise CredentialReadError("Credential store is malformed; no login was changed.")
+    return value
 
 
 def read_cred_hex(slot):
     """Read a credential hex-encoded. The plaintext is never printed, never
     written to a file, and never returned to a caller that prints it."""
+    if IS_WINDOWS:
+        value = read_windows_credential(slot)
+        return json.dumps(value, sort_keys=True).encode().hex() if value is not None else None
     r = subprocess.run(["security", "find-generic-password", "-a", USER, "-s", slot, "-w"],
                        capture_output=True, text=True)
     if r.returncode != 0 or not r.stdout.strip():
@@ -285,7 +340,8 @@ def has_claude_login(slot):
 
 def identity(path):
     try:
-        return (json.load(open(path)).get("oauthAccount") or {})
+        with open(path, encoding="utf-8-sig") as f:
+            return (json.load(f).get("oauthAccount") or {})
     except Exception:
         return {}
 
@@ -331,6 +387,11 @@ def valid_name(n):
     that gap once let a homoglyph profile name split the tools' view of reality.
     SYNC WARNING: keep identical to new-profile.sh's `case *[!a-zA-Z0-9_-]*`.
     verify.sh D3 re-runs the parity check."""
+    if IS_WINDOWS and n.startswith("-"):
+        return False
+    if IS_WINDOWS and (n.upper() in {"CON", "PRN", "AUX", "NUL", "CLOCK$", "__PYCACHE__"}
+                       or n.upper() in {f"{prefix}{i}" for prefix in ("COM", "LPT") for i in range(1, 10)}):
+        return False
     return bool(n) and all(ch in _NAME_OK for ch in n)
 
 
@@ -451,6 +512,8 @@ def fleet_switch(name, runner=None, quiet=False):
     happened" — that exact framing let a watcher retry a half-done switch into
     a destroyed account on 2026-08-05."""
     say = (lambda *a: None) if quiet else print
+    if IS_WINDOWS:
+        return windows_browser_switch(name, runner, say)
 
     if name in FLEET_BLOCKED:
         say(f"{C['red']}{name} is blocked from the fleet lane: {FLEET_BLOCKED[name]}{C['off']}")
@@ -581,6 +644,45 @@ def fleet_switch(name, runner=None, quiet=False):
     return 4
 
 
+def windows_browser_switch(name, runner, say):
+    """Explicit fresh login into the default store; no claim about running sessions."""
+    if (not valid_name(name) or name not in profiles() or name in FLEET_BLOCKED):
+        say("No eligible profile. Create it with claude-new-profile, then claude-login.")
+        return 1
+    expected = expected_email(name)
+    try:
+        if not expected or not has_claude_login(slot_for(os.path.join(BASE, name))):
+            say(f"First sign this profile in separately: claude-login {name}")
+            return 1
+        before = slot_fingerprint(FLEET_SLOT)
+        previous = fleet_email()
+        say(f"Default login → {name} ({expected}). Choose this account in your browser.")
+        say("Running sessions are not switched or stopped; Windows convergence is unverified.")
+        (runner or (lambda: _run_login(expected)))()
+        after = slot_fingerprint(FLEET_SLOT)
+    except CredentialReadError as error:
+        say(str(error))
+        return 4
+    got = fleet_email()
+    if after == before:
+        say("No credential change detected. Login was not verified.")
+        return 2
+    if not got:
+        say("Default login changed but identity could not be verified. Run claude-switch again.")
+        return 4
+    try:
+        with open(UNDO, "w", encoding="utf-8") as f:
+            json.dump({"previous_email": previous, "previous_profile": profile_for_email(previous),
+                       "to_email": got, "requested": name}, f)
+    except OSError:
+        say("Could not save undo history.")
+    if got != expected:
+        say(f"Browser signed in as {got}, not {expected}. Default login has changed.")
+        return 3
+    say(f"Verified default login: {got}. Start a new session to use it.")
+    return 0
+
+
 def undo_fleet(runner=None, quiet=False):
     """Fleet-switch back to the previous account — which, in this design, is
     just another aimed browser login."""
@@ -604,6 +706,8 @@ def undo_fleet(runner=None, quiet=False):
 def _process_lanes():
     """(shared_count, pinned{dir:count}) across running claude processes.
     Display-only; any failure returns None and the caller omits the line."""
+    if IS_WINDOWS:
+        return None  # No reliable Windows environment inspection; never guess or kill sessions.
     script = r"""ps -eo pid,command | grep -E 'claude' | grep -v grep \
       | grep -vE 'claude-cockpit|claude-switch|claude-usage|autoswitch|Claude Helper|Claude\.app|claudefordesktop|ShipIt' \
       | awk '{print $1}' | while read p; do
@@ -630,8 +734,10 @@ def _process_lanes():
 def show():
     fe = fleet_email()
     anchor = profile_for_email(fe)
-    print(f"\n{C['bold']}FLEET{C['off']} — the account all shared sessions, new terminals, "
-          f"and scheduled jobs are on")
+    if IS_WINDOWS:
+        print("Windows: default-login identity only; running-session adoption is unverified.")
+    print("DEFAULT LOGIN" if IS_WINDOWS else
+          f"\n{C['bold']}FLEET{C['off']} — the account all shared sessions, new terminals, and scheduled jobs are on")
     if fe:
         print(f"   {C['grn']}{fe}{C['off']}" + (f"  (profile: {anchor})" if anchor else
               f"  {C['yel']}(no anchor profile — next switch overwrites its only local grant){C['off']}"))
@@ -651,6 +757,9 @@ def show():
                 f"{C['red']}NO LOGIN — claude-login {p}{C['off']}"
         blocked = f"  {C['yel']}[fleet-blocked: {FLEET_BLOCKED[p]}]{C['off']}" if p in FLEET_BLOCKED else ""
         print(f" {mark} {p:<12} {em:<40} {state}{blocked}")
+    if IS_WINDOWS:
+        print("\nChange default login: claude-switch <name>. Pinned session: claude-as <name>.")
+        return 0
     print(f"\n{C['dim']}Switch everything:  claude-switch <name>   (one browser login, ~15s)"
           f"{C['off']}")
     print(f"{C['dim']}One-off session:    claude-as <name>{C['off']}\n")
@@ -661,7 +770,11 @@ def main():
     require_claude()
     a = [x for x in sys.argv[1:] if x]
     if not a:
-        return show()
+        try:
+            return show()
+        except CredentialReadError as error:
+            print(str(error), file=sys.stderr)
+            return 4
     if a[0] in ("--undo", "-u"):
         return undo_fleet()
     if a[0] in ("--active", "--current"):

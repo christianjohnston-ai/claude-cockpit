@@ -1,0 +1,3 @@
+# Official package registry: https://pypi.org/project/windows-curses/2.4.2/
+# Installed only in the cockpit's per-user virtual environment, as a binary wheel.
+windows-curses==2.4.2; sys_platform == "win32"
